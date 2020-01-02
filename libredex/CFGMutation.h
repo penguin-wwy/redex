@@ -19,16 +19,14 @@ namespace cfg {
 /// can be flushed out in batches.  This offers an alternative to modifying the
 /// IR in a CFG whilst iterating over its instructions which is not supported in
 /// general as a modification to the IR could invalidate the iterator.
+///
+/// TODO(T59235117) Flush mutation in the destructor.
 class CFGMutation {
  public:
   enum class Insert { Before, After, Replacing };
 
   /// Create a new mutation to apply to \p cfg.
   CFGMutation(ControlFlowGraph& cfg);
-
-  /// Any changes remaining in the buffer will be flushed when the mutation is
-  /// destroyed.
-  ~CFGMutation();
 
   /// CFGMutation is not copyable
   CFGMutation(const CFGMutation&) = delete;
@@ -77,9 +75,12 @@ class CFGMutation {
                   const cfg::InstructionIterator& anchor,
                   std::vector<IRInstruction*> instructions);
 
-  /// Apply all the changes that have been added since the last flush (or since
-  /// the mutation was created).  Changes are applied in the order they are
-  /// added to the mutation.
+  /// Remove all pending changes without applying them.
+  void clear();
+
+  /// Apply all the changes that have been added since the last flush or clear
+  /// (or since the mutation was created).  Changes are applied in the order
+  /// they are added to the mutation.
   void flush();
 
  private:
@@ -101,6 +102,10 @@ class CFGMutation {
     /// Check \link CFGMutation::add_change \endlink for more details
     void add_change(Insert where, std::vector<IRInstruction*> insn_change);
 
+    /// Free the instructions owned by this ChangeSet.  Leaves the ChangeSet
+    /// empty (so applying it would be a nop).
+    void dispose();
+
    private:
     std::vector<IRInstruction*> m_insert_before;
     boost::optional<std::vector<IRInstruction*>> m_replace;
@@ -112,8 +117,6 @@ class CFGMutation {
 };
 
 inline CFGMutation::CFGMutation(cfg::ControlFlowGraph& cfg) : m_cfg(cfg) {}
-
-inline CFGMutation::~CFGMutation() { flush(); }
 
 inline void CFGMutation::ChangeSet::add_change(
     Insert where, std::vector<IRInstruction*> insns) {

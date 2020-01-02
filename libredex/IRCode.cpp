@@ -401,6 +401,12 @@ void translate_dex_to_ir(
     } else if (dex_insn->has_method()) {
       insn->set_method(
           static_cast<const DexOpcodeMethod*>(dex_insn)->get_method());
+    } else if (dex_insn->has_callsite()) {
+      insn->set_callsite(
+          static_cast<const DexOpcodeCallSite*>(dex_insn)->get_callsite());
+    } else if (dex_insn->has_methodhandle()) {
+      insn->set_methodhandle(static_cast<const DexOpcodeMethodHandle*>(dex_insn)
+                                 ->get_methodhandle());
     } else if (dex_opcode::has_literal(dex_op)) {
       insn->set_literal(dex_insn->get_literal());
     } else if (op == OPCODE_FILL_ARRAY_DATA) {
@@ -1061,5 +1067,22 @@ void IRCode::gather_methods(std::vector<DexMethodRef*>& lmethod) const {
     m_cfg->gather_methods(lmethod);
   } else {
     m_ir_list->gather_methods(lmethod);
+  }
+}
+
+void IRCode::gather_callsites(std::vector<DexCallSite*>& lcallsite) const {
+  if (editable_cfg_built()) {
+    m_cfg->gather_callsites(lcallsite);
+  } else {
+    m_ir_list->gather_callsites(lcallsite);
+  }
+}
+
+void IRCode::gather_methodhandles(
+    std::vector<DexMethodHandle*>& lmethodhandle) const {
+  if (editable_cfg_built()) {
+    m_cfg->gather_methodhandles(lmethodhandle);
+  } else {
+    m_ir_list->gather_methodhandles(lmethodhandle);
   }
 }

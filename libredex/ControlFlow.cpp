@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "DexUtil.h"
+#include "GraphUtil.h"
 #include "Transform.h"
 #include "WeakTopologicalOrdering.h"
 
@@ -1156,6 +1157,22 @@ void ControlFlowGraph::gather_methods(
   }
 }
 
+void ControlFlowGraph::gather_callsites(
+    std::vector<DexCallSite*>& callsites) const {
+  always_assert(editable());
+  for (const auto& entry : m_blocks) {
+    entry.second->m_entries.gather_callsites(callsites);
+  }
+}
+
+void ControlFlowGraph::gather_methodhandles(
+    std::vector<DexMethodHandle*>& methodhandles) const {
+  always_assert(editable());
+  for (const auto& entry : m_blocks) {
+    entry.second->m_entries.gather_methodhandles(methodhandles);
+  }
+}
+
 cfg::InstructionIterator ControlFlowGraph::primary_instruction_of_move_result(
     const cfg::InstructionIterator& it) {
   auto move_result_insn = it->insn;
@@ -1647,7 +1664,7 @@ std::vector<Block*> ControlFlowGraph::blocks() const {
 }
 
 // Uses a standard depth-first search ith a side table of already-visited nodes.
-std::vector<Block*> ControlFlowGraph::blocks_post_helper(bool reverse) const {
+std::vector<Block*> ControlFlowGraph::blocks_reverse_post_deprecated() const {
   std::stack<Block*> stack;
   for (const auto& entry : m_blocks) {
     // include unreachable blocks too
@@ -1680,18 +1697,8 @@ std::vector<Block*> ControlFlowGraph::blocks_post_helper(bool reverse) const {
       stack.pop();
     }
   }
-  if (reverse) {
-    std::reverse(postorder.begin(), postorder.end());
-  }
+  std::reverse(postorder.begin(), postorder.end());
   return postorder;
-}
-
-std::vector<Block*> ControlFlowGraph::blocks_reverse_post() const {
-  return blocks_post_helper(true);
-}
-
-std::vector<Block*> ControlFlowGraph::blocks_post() const {
-  return blocks_post_helper(false);
 }
 
 ControlFlowGraph::~ControlFlowGraph() {
@@ -2289,82 +2296,6 @@ std::ostream& ControlFlowGraph::write_dot_format(std::ostream& o) const {
   }
   o << "}\n";
   return o;
-}
-
-Block* ControlFlowGraph::idom_intersect(
-    const std::unordered_map<Block*, DominatorInfo>& postorder_dominator,
-    Block* block1,
-    Block* block2) const {
-  auto finger1 = block1;
-  auto finger2 = block2;
-  while (finger1 != finger2) {
-    while (postorder_dominator.at(finger1).postorder <
-           postorder_dominator.at(finger2).postorder) {
-      finger1 = postorder_dominator.at(finger1).dom;
-    }
-    while (postorder_dominator.at(finger2).postorder <
-           postorder_dominator.at(finger1).postorder) {
-      finger2 = postorder_dominator.at(finger2).dom;
-    }
-  }
-  return finger1;
-}
-
-// Finding immediate dominator for each blocks in ControlFlowGraph.
-// Theory from:
-//    K. D. Cooper et.al. A Simple, Fast Dominance Algorithm.
-std::unordered_map<Block*, DominatorInfo>
-ControlFlowGraph::immediate_dominators() const {
-  // Get postorder of blocks and create map of block to postorder number.
-  std::unordered_map<Block*, DominatorInfo> postorder_dominator;
-  const auto& postorder_blocks = blocks_post();
-  for (size_t i = 0; i < postorder_blocks.size(); ++i) {
-    postorder_dominator[postorder_blocks[i]].postorder = i;
-  }
-
-  // Initialize immediate dominators. Having value as nullptr means it has
-  // not been processed yet.
-  for (Block* block : blocks()) {
-    if (block->preds().empty()) {
-      // Entry block's immediate dominator is itself.
-      postorder_dominator[block].dom = block;
-    } else {
-      postorder_dominator[block].dom = nullptr;
-    }
-  }
-
-  bool changed = true;
-  while (changed) {
-    changed = false;
-    // Traverse block in reverse postorder.
-    for (auto rit = postorder_blocks.rbegin(); rit != postorder_blocks.rend();
-         ++rit) {
-      Block* ordered_block = *rit;
-      if (ordered_block->preds().empty()) {
-        continue;
-      }
-      Block* new_idom = nullptr;
-      // Pick one random processed block as starting point.
-      for (auto& pred : ordered_block->preds()) {
-        if (postorder_dominator[pred->src()].dom != nullptr) {
-          new_idom = pred->src();
-          break;
-        }
-      }
-      always_assert(new_idom != nullptr);
-      for (auto& pred : ordered_block->preds()) {
-        if (pred->src() != new_idom &&
-            postorder_dominator[pred->src()].dom != nullptr) {
-          new_idom = idom_intersect(postorder_dominator, new_idom, pred->src());
-        }
-      }
-      if (postorder_dominator[ordered_block].dom != new_idom) {
-        postorder_dominator[ordered_block].dom = new_idom;
-        changed = true;
-      }
-    }
-  }
-  return postorder_dominator;
 }
 
 ControlFlowGraph::EdgeSet ControlFlowGraph::remove_succ_edges(Block* b,

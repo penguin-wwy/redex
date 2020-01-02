@@ -127,7 +127,9 @@ libredex_la_SOURCES = \
 	libredex/ControlFlow.cpp \
 	libredex/Creators.cpp \
 	libredex/Debug.cpp \
+	libredex/DexAccess.cpp \
 	libredex/DexAnnotation.cpp \
+	libredex/DexCallSite.cpp \
 	libredex/DexClass.cpp \
 	libredex/DexDebugInstruction.cpp \
 	libredex/DexEncoding.cpp \
@@ -136,6 +138,7 @@ libredex_la_SOURCES = \
 	libredex/DexInstruction.cpp \
 	libredex/DexLoader.cpp \
 	libredex/DexMemberRefs.cpp \
+	libredex/DexMethodHandle.cpp \
 	libredex/DexOpcode.cpp \
 	libredex/DexOutput.cpp \
 	libredex/DexPosition.cpp \
@@ -149,6 +152,7 @@ libredex_la_SOURCES = \
 	libredex/EditableCfgAdapter.cpp \
 	libredex/FieldOpTracker.cpp \
 	libredex/GlobalConfig.cpp \
+	libredex/GraphVisualizer.cpp \
 	libredex/HierarchyUtil.cpp \
 	libredex/ImmutableSubcomponentAnalyzer.cpp \
 	libredex/InitCollisionFinder.cpp \

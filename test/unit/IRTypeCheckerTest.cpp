@@ -49,6 +49,16 @@ class IRTypeCheckerTest : public RedexTest {
     m_method->set_deobfuscated_name("testMethod");
     m_method->set_code(std::make_unique<IRCode>(m_method, /* temp_regs */ 5));
 
+    proto = DexProto::make_proto(type::java_lang_Object(), args);
+    m_method_ret_obj =
+        DexMethod::make_method(DexType::make_type("Lbar;"),
+                               DexString::make_string("testMethodRetObj"),
+                               proto)
+            ->make_concrete(ACC_PUBLIC | ACC_STATIC, /* is_virtual */ false);
+    m_method_ret_obj->set_deobfuscated_name("testMethodRetObj");
+    m_method_ret_obj->set_code(
+        std::make_unique<IRCode>(m_method_ret_obj, /* temp_regs */ 5));
+
     m_virtual_method =
         DexMethod::make_method(DexType::make_type("Lbar;"),
                                DexString::make_string("testVirtualMethod"),
@@ -67,6 +77,14 @@ class IRTypeCheckerTest : public RedexTest {
     add_code(m_method, insns);
   }
 
+  void add_code_ret_obj(const std::vector<IRInstruction*>& insns) {
+    add_code(m_method_ret_obj, insns);
+  }
+
+  void add_code_ret_obj(const std::unique_ptr<IRCode>& insns) {
+    add_code(m_method_ret_obj, insns);
+  }
+
   void add_code(DexMethod* m, const std::vector<IRInstruction*>& insns) {
     IRCode* code = m->get_code();
     for (const auto& insn : insns) {
@@ -83,6 +101,7 @@ class IRTypeCheckerTest : public RedexTest {
 
  protected:
   DexMethod* m_method;
+  DexMethod* m_method_ret_obj;
   DexMethod* m_virtual_method;
 };
 
@@ -547,8 +566,8 @@ TEST_F(IRTypeCheckerTest, zeroOrReference) {
       dasm(OPCODE_MONITOR_EXIT, {0_v}),
       dasm(OPCODE_THROW, {1_v}),
   };
-  add_code(insns);
-  IRTypeChecker checker(m_method);
+  add_code_ret_obj(insns);
+  IRTypeChecker checker(m_method_ret_obj);
   checker.run();
   EXPECT_TRUE(checker.good()) << checker.what();
   EXPECT_EQ("OK", checker.what());
@@ -664,12 +683,235 @@ TEST_F(IRTypeCheckerTest, joinDexTypesSharingCommonBaseSimple) {
   // Checks
   EXPECT_TRUE(checker.good()) << checker.what();
   EXPECT_EQ("OK", checker.what());
-  EXPECT_EQ(type_a, checker.get_dex_type(insns[2], 0));
-  EXPECT_EQ(type_a, checker.get_dex_type(insns[3], 0));
-  EXPECT_EQ(type_b, checker.get_dex_type(insns[6], 0));
-  EXPECT_EQ(type_b, checker.get_dex_type(insns[7], 0));
-  EXPECT_EQ(type_base, checker.get_dex_type(insns[8], 0));
-  EXPECT_EQ(type_base, checker.get_dex_type(insns[9], 0));
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[2], 0));
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[3], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[6], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[7], 0));
+  EXPECT_EQ(type_base, *checker.get_dex_type(insns[8], 0));
+  EXPECT_EQ(type_base, *checker.get_dex_type(insns[9], 0));
+}
+
+/**
+ * The bytecode stream of the following Java code.
+ * A simple branch join scenario on a reference type.
+ *
+ * Base base = null;
+ * if (condition) {
+ *   base = new A();
+ *   base.foo();
+ * } else {
+ *   base = new B();
+ *   base.foo();
+ * }
+ * base.foo();
+ */
+TEST_F(IRTypeCheckerTest, joinCommonBaseWithConflictingInterface) {
+  // Construct type hierarhcy.
+  const auto type_base = DexType::make_type("LBase;");
+  const auto type_a = DexType::make_type("LA;");
+  const auto type_b = DexType::make_type("LB;");
+  const auto type_i = DexType::make_type("LI;");
+
+  ClassCreator cls_base_creator(type_base);
+  cls_base_creator.set_super(type::java_lang_Object());
+  auto base_foo =
+      DexMethod::make_method("LBase;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_base_creator.add_method(base_foo);
+  cls_base_creator.create();
+
+  ClassCreator cls_a_creator(type_a);
+  cls_a_creator.set_super(type_base);
+  auto a_ctor = DexMethod::make_method("LA;.<init>:()V")
+                    ->make_concrete(ACC_PUBLIC, false);
+  cls_a_creator.add_method(a_ctor);
+  auto a_foo =
+      DexMethod::make_method("LA;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_a_creator.add_method(a_foo);
+  cls_a_creator.create();
+
+  ClassCreator cls_b_creator(type_b);
+  cls_b_creator.set_super(type_base);
+  cls_b_creator.add_interface(type_i);
+
+  auto b_ctor = DexMethod::make_method("LB;.<init>:()V")
+                    ->make_concrete(ACC_PUBLIC, false);
+  cls_b_creator.add_method(b_ctor);
+  auto b_foo =
+      DexMethod::make_method("LB;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_b_creator.add_method(b_foo);
+  cls_b_creator.create();
+
+  // Construct code that references the above hierarhcy.
+  using namespace dex_asm;
+  auto if_mie = new MethodItemEntry(dasm(OPCODE_IF_EQZ, {5_v}));
+  auto goto_mie = new MethodItemEntry(dasm(OPCODE_GOTO, {}));
+  auto target1 = new BranchTarget(if_mie);
+  auto target2 = new BranchTarget(goto_mie);
+
+  std::vector<IRInstruction*> insns = {
+      // B0
+      // *if_mie, // branch to target1
+      // B1
+      dasm(OPCODE_NEW_INSTANCE, type_a),
+      dasm(IOPCODE_MOVE_RESULT_PSEUDO_OBJECT, {0_v}),
+      dasm(OPCODE_INVOKE_DIRECT, a_ctor, {0_v}),
+      dasm(OPCODE_INVOKE_VIRTUAL, a_foo, {0_v}),
+      // *goto_mie, // branch to target2
+      // B2
+      // target1,
+      dasm(OPCODE_NEW_INSTANCE, type_b),
+      dasm(IOPCODE_MOVE_RESULT_PSEUDO_OBJECT, {0_v}),
+      dasm(OPCODE_INVOKE_DIRECT, b_ctor, {0_v}),
+      dasm(OPCODE_INVOKE_VIRTUAL, b_foo, {0_v}),
+      // target2,
+      // B3
+      // Coming out of one branch, v0 is a reference and coming out of the
+      // other,
+      // it's an integer.
+      dasm(OPCODE_INVOKE_VIRTUAL, base_foo, {0_v}),
+      dasm(OPCODE_RETURN, {9_v}),
+  };
+
+  IRCode* code = m_method->get_code();
+  code->push_back(*if_mie);
+  code->push_back(insns[0]);
+  code->push_back(insns[1]);
+  code->push_back(insns[2]);
+  code->push_back(insns[3]);
+  code->push_back(*goto_mie);
+  code->push_back(target1);
+  code->push_back(insns[4]);
+  code->push_back(insns[5]);
+  code->push_back(insns[6]);
+  code->push_back(insns[7]);
+  code->push_back(target2);
+  code->push_back(insns[8]);
+  code->push_back(insns[9]);
+
+  add_code(insns);
+  IRTypeChecker checker(m_method);
+  checker.run();
+  // Checks
+  EXPECT_TRUE(checker.good()) << checker.what();
+  EXPECT_EQ("OK", checker.what());
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[2], 0));
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[3], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[6], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[7], 0));
+  EXPECT_EQ(boost::none, checker.get_dex_type(insns[8], 0));
+  EXPECT_EQ(boost::none, checker.get_dex_type(insns[9], 0));
+}
+
+/**
+ * The bytecode stream of the following Java code.
+ * A simple branch join scenario on a reference type.
+ *
+ * Base base = null;
+ * if (condition) {
+ *   base = new A();
+ *   base.foo();
+ * } else {
+ *   base = new B();
+ *   base.foo();
+ * }
+ * base.foo();
+ */
+TEST_F(IRTypeCheckerTest, joinCommonBaseWithMergableInterface) {
+  // Construct type hierarhcy.
+  const auto type_base = DexType::make_type("LBase;");
+  const auto type_a = DexType::make_type("LA;");
+  const auto type_b = DexType::make_type("LB;");
+  const auto type_i = DexType::make_type("LI;");
+
+  ClassCreator cls_base_creator(type_base);
+  cls_base_creator.set_super(type::java_lang_Object());
+  cls_base_creator.add_interface(type_i);
+  auto base_foo =
+      DexMethod::make_method("LBase;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_base_creator.add_method(base_foo);
+  cls_base_creator.create();
+
+  ClassCreator cls_a_creator(type_a);
+  cls_a_creator.set_super(type_base);
+  auto a_ctor = DexMethod::make_method("LA;.<init>:()V")
+                    ->make_concrete(ACC_PUBLIC, false);
+  cls_a_creator.add_method(a_ctor);
+  auto a_foo =
+      DexMethod::make_method("LA;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_a_creator.add_method(a_foo);
+  cls_a_creator.create();
+
+  ClassCreator cls_b_creator(type_b);
+  cls_b_creator.set_super(type_base);
+  cls_b_creator.add_interface(type_i);
+
+  auto b_ctor = DexMethod::make_method("LB;.<init>:()V")
+                    ->make_concrete(ACC_PUBLIC, false);
+  cls_b_creator.add_method(b_ctor);
+  auto b_foo =
+      DexMethod::make_method("LB;.foo:()I")->make_concrete(ACC_PUBLIC, true);
+  cls_b_creator.add_method(b_foo);
+  cls_b_creator.create();
+
+  // Construct code that references the above hierarhcy.
+  using namespace dex_asm;
+  auto if_mie = new MethodItemEntry(dasm(OPCODE_IF_EQZ, {5_v}));
+  auto goto_mie = new MethodItemEntry(dasm(OPCODE_GOTO, {}));
+  auto target1 = new BranchTarget(if_mie);
+  auto target2 = new BranchTarget(goto_mie);
+
+  std::vector<IRInstruction*> insns = {
+      // B0
+      // *if_mie, // branch to target1
+      // B1
+      dasm(OPCODE_NEW_INSTANCE, type_a),
+      dasm(IOPCODE_MOVE_RESULT_PSEUDO_OBJECT, {0_v}),
+      dasm(OPCODE_INVOKE_DIRECT, a_ctor, {0_v}),
+      dasm(OPCODE_INVOKE_VIRTUAL, a_foo, {0_v}),
+      // *goto_mie, // branch to target2
+      // B2
+      // target1,
+      dasm(OPCODE_NEW_INSTANCE, type_b),
+      dasm(IOPCODE_MOVE_RESULT_PSEUDO_OBJECT, {0_v}),
+      dasm(OPCODE_INVOKE_DIRECT, b_ctor, {0_v}),
+      dasm(OPCODE_INVOKE_VIRTUAL, b_foo, {0_v}),
+      // target2,
+      // B3
+      // Coming out of one branch, v0 is a reference and coming out of the
+      // other,
+      // it's an integer.
+      dasm(OPCODE_INVOKE_VIRTUAL, base_foo, {0_v}),
+      dasm(OPCODE_RETURN, {9_v}),
+  };
+
+  IRCode* code = m_method->get_code();
+  code->push_back(*if_mie);
+  code->push_back(insns[0]);
+  code->push_back(insns[1]);
+  code->push_back(insns[2]);
+  code->push_back(insns[3]);
+  code->push_back(*goto_mie);
+  code->push_back(target1);
+  code->push_back(insns[4]);
+  code->push_back(insns[5]);
+  code->push_back(insns[6]);
+  code->push_back(insns[7]);
+  code->push_back(target2);
+  code->push_back(insns[8]);
+  code->push_back(insns[9]);
+
+  add_code(insns);
+  IRTypeChecker checker(m_method);
+  checker.run();
+  // Checks
+  EXPECT_TRUE(checker.good()) << checker.what();
+  EXPECT_EQ("OK", checker.what());
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[2], 0));
+  EXPECT_EQ(type_a, *checker.get_dex_type(insns[3], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[6], 0));
+  EXPECT_EQ(type_b, *checker.get_dex_type(insns[7], 0));
+  EXPECT_EQ(type_base, *checker.get_dex_type(insns[8], 0));
+  EXPECT_EQ(type_base, *checker.get_dex_type(insns[9], 0));
 }
 
 TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
@@ -680,9 +922,9 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
       (
         (load-param-object v0)
         (load-param-object v1)
-        (new-instance "C;")
+        (new-instance "LFoo;")
         (move-result-pseudo-object v0)
-        (invoke-direct (v0) "C;.<init>:()V")
+        (invoke-direct (v0) "LFoo;.<init>:()V")
       )
     )"));
     IRTypeChecker checker(method);
@@ -696,7 +938,7 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
       (
         (load-param-object v0)
         (load-param-object v1)
-        (new-instance "C;")
+        (new-instance "LFoo;")
         (move-result-pseudo-object v0)
       )
     )"));
@@ -712,7 +954,7 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
       (
         (load-param-object v0)
         (load-param-object v1)
-        (new-instance "C;")
+        (new-instance "LFoo;")
         (move-result-pseudo-object v0)
         (move-object v1 v0)
         (return-object v1)
@@ -732,10 +974,10 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
     (
       (load-param-object v0)
       (load-param-object v1)
-      (new-instance "C;")
+      (new-instance "LFoo;")
       (move-result-pseudo-object v0)
       (move-object v1 v0)
-      (invoke-direct (v0) "C;.<init>:()V")
+      (invoke-direct (v0) "LFoo;.<init>:()V")
       (return-object v1)
     )
   )"));
@@ -751,7 +993,7 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
     (
       (load-param-object v0)
       (load-param-object v1)
-      (new-instance "C;")
+      (new-instance "LFoo;")
       (move-result-pseudo-object v0)
       (move-object v1 v0)
       (return-object v1)
@@ -771,11 +1013,11 @@ TEST_F(IRTypeCheckerTest, invokeInitAfterNewInstance) {
       (
         (load-param-object v0)
         (load-param-object v1)
-        (new-instance "C;")
+        (new-instance "LFoo;")
         (move-result-pseudo-object v0)
-        (new-instance "C;")
+        (new-instance "LFoo;")
         (move-result-pseudo-object v5)
-        (invoke-direct (v5) "C;.<init>:()V")
+        (invoke-direct (v5) "LFoo;.<init>:()V")
         (return-object v5)
         (return-object v0)
       )

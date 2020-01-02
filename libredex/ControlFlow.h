@@ -376,10 +376,12 @@ class ControlFlowGraph {
 
   // Return vector of blocks in reverse post order (RPO). If there is a path
   // from Block A to Block B, then A appears before B in this vector.
-  std::vector<Block*> blocks_reverse_post() const;
-  // Return vector of blocks in post order (PO). If there is a path
-  // from Block A to Block B, then A appears after B in this vector.
-  std::vector<Block*> blocks_post() const;
+  //
+  //
+  // DEPRECATED: Use graph::postorder_sort instead, which is faster. The only
+  // functional difference is that the new version doesn't include unreachable
+  // blocks in the sorted output.
+  std::vector<Block*> blocks_reverse_post_deprecated() const;
 
   Block* create_block();
 
@@ -658,15 +660,6 @@ class ControlFlowGraph {
    */
   std::ostream& write_dot_format(std::ostream&) const;
 
-  // Find a common dominator block that is closest to both block.
-  Block* idom_intersect(
-      const std::unordered_map<Block*, DominatorInfo>& postorder_dominator,
-      Block* block1,
-      Block* block2) const;
-
-  // Finding immediate dominator for each blocks in ControlFlowGraph.
-  std::unordered_map<Block*, DominatorInfo> immediate_dominators() const;
-
   // Do writes to this CFG propagate back to IR and Dex code?
   bool editable() const { return m_editable; }
 
@@ -724,6 +717,8 @@ class ControlFlowGraph {
   void gather_types(std::vector<DexType*>& types) const;
   void gather_fields(std::vector<DexFieldRef*>& fields) const;
   void gather_methods(std::vector<DexMethodRef*>& methods) const;
+  void gather_callsites(std::vector<DexCallSite*>& callsites) const;
+  void gather_methodhandles(std::vector<DexMethodHandle*>& methodhandles) const;
 
   cfg::InstructionIterator primary_instruction_of_move_result(
       const cfg::InstructionIterator& it);
