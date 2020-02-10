@@ -373,12 +373,20 @@ bool KeepRuleMatcher::has_annotation(const DexMember* member,
   if (annos == nullptr) {
     return false;
   }
-  auto annotation_regex = proguard_parser::form_type_regex(annotation);
-  const boost::regex& annotation_matcher = register_matcher(annotation_regex);
-  for (const auto& anno : annos->get_annotations()) {
-    if (boost::regex_match(get_deobfuscated_name(anno->type()),
-                           annotation_matcher)) {
-      return true;
+  if (!proguard_parser::has_special_char(annotation)) {
+    for (const auto& anno : annos->get_annotations()) {
+      if (get_deobfuscated_name(anno->type()) == annotation) {
+        return true;
+      }
+    }
+  } else {
+    auto annotation_regex = proguard_parser::form_type_regex(annotation);
+    const boost::regex& annotation_matcher = register_matcher(annotation_regex);
+    for (const auto& anno : annos->get_annotations()) {
+      if (boost::regex_match(get_deobfuscated_name(anno->type()),
+                             annotation_matcher)) {
+        return true;
+      }
     }
   }
   return false;
@@ -394,7 +402,8 @@ std::string extract_field_name(std::string qualified_fieldname) {
   return qualified_fieldname.substr(p + 2);
 }
 
-std::string extract_method_name_and_type(std::string qualified_fieldname) {
+std::string extract_method_name_and_type(
+    const std::string& qualified_fieldname) {
   auto p = qualified_fieldname.find(";.");
   return qualified_fieldname.substr(p + 2);
 }

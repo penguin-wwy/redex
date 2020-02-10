@@ -13,6 +13,24 @@
 #include "DexUtil.h"
 #include "IRInstruction.h"
 
+bool TryEntry::operator==(const TryEntry& other) const {
+  return type == other.type && *catch_start == *other.catch_start;
+}
+
+bool CatchEntry::operator==(const CatchEntry& other) const {
+  if (catch_type != other.catch_type) return false;
+  if (next == other.next) return true;
+  if (next == nullptr || other.next == nullptr) return false;
+  return *next == *other.next;
+}
+
+bool BranchTarget::operator==(const BranchTarget& other) const {
+  if (type != other.type) return false;
+  if (src == other.src) return true;
+  if (src == nullptr || other.src == nullptr) return false;
+  return *src == *other.src;
+}
+
 MethodItemEntry::MethodItemEntry(const MethodItemEntry& that)
     : type(that.type) {
   switch (type) {
@@ -282,8 +300,35 @@ void MethodItemEntryCloner::fix_parent_positions(
   }
 }
 
+bool MethodItemEntry::operator==(const MethodItemEntry& that) const {
+  if (type != that.type) {
+    return false;
+  }
+
+  switch (type) {
+  case MFLOW_TRY:
+    return *tentry == *that.tentry;
+  case MFLOW_CATCH:
+    return *centry == *that.centry;
+  case MFLOW_OPCODE:
+    return *insn == *that.insn;
+  case MFLOW_DEX_OPCODE:
+    return *dex_insn == *that.dex_insn;
+  case MFLOW_TARGET:
+    return *target == *that.target;
+  case MFLOW_DEBUG:
+    return *dbgop == *that.dbgop;
+  case MFLOW_POSITION:
+    return *pos == *that.pos;
+  case MFLOW_FALLTHROUGH:
+    return true;
+  };
+
+  not_reached();
+}
+
 void IRList::replace_opcode(IRInstruction* to_delete,
-                            std::vector<IRInstruction*> replacements) {
+                            const std::vector<IRInstruction*>& replacements) {
   auto it = m_list.begin();
   for (; it != m_list.end(); it++) {
     if (it->type == MFLOW_OPCODE && it->insn == to_delete) {
@@ -619,7 +664,7 @@ IRList::iterator IRList::main_block() {
   return std::prev(get_param_instructions().end());
 }
 
-IRList::iterator IRList::make_if_block(IRList::iterator cur,
+IRList::iterator IRList::make_if_block(const IRList::iterator& cur,
                                        IRInstruction* insn,
                                        IRList::iterator* false_block) {
   auto if_entry = new MethodItemEntry(insn);
@@ -629,7 +674,7 @@ IRList::iterator IRList::make_if_block(IRList::iterator cur,
   return m_list.insert(m_list.end(), *bentry);
 }
 
-IRList::iterator IRList::make_if_else_block(IRList::iterator cur,
+IRList::iterator IRList::make_if_else_block(const IRList::iterator& cur,
                                             IRInstruction* insn,
                                             IRList::iterator* false_block,
                                             IRList::iterator* true_block) {
@@ -655,7 +700,7 @@ IRList::iterator IRList::make_if_else_block(IRList::iterator cur,
 }
 
 IRList::iterator IRList::make_switch_block(
-    IRList::iterator cur,
+    const IRList::iterator& cur,
     IRInstruction* insn,
     IRList::iterator* default_block,
     std::map<SwitchIndices, IRList::iterator>& cases) {

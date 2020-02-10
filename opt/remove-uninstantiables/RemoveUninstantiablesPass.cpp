@@ -35,6 +35,23 @@ IRInstruction* ir_throw(uint32_t src) {
   return insn;
 }
 
+/// \return a new \c IRInstruction representing a `check-cast` operation,
+/// verifying that \p src is compatible with \p type.
+IRInstruction* ir_check_cast(uint32_t src, DexType* type) {
+  auto insn = new IRInstruction(OPCODE_CHECK_CAST);
+  insn->set_src(0, src);
+  insn->set_type(type);
+  return insn;
+}
+
+/// \return a new \c IRInstruction representing a `move-result-pseudo-object`
+/// operation.
+IRInstruction* ir_move_result_pseudo_object(uint32_t dest) {
+  auto insn = new IRInstruction(IOPCODE_MOVE_RESULT_PSEUDO_OBJECT);
+  insn->set_dest(dest);
+  return insn;
+}
+
 } // namespace
 
 RemoveUninstantiablesPass::Stats& RemoveUninstantiablesPass::Stats::operator+=(
@@ -46,6 +63,7 @@ RemoveUninstantiablesPass::Stats& RemoveUninstantiablesPass::Stats::operator+=(
   this->instance_methods_of_uninstantiable +=
       that.instance_methods_of_uninstantiable;
   this->get_uninstantiables += that.get_uninstantiables;
+  this->check_casts += that.check_casts;
   return *this;
 }
 
@@ -70,6 +88,7 @@ void RemoveUninstantiablesPass::Stats::report(PassManager& mgr) const {
   REPORT(field_accesses_on_uninstantiable);
   REPORT(instance_methods_of_uninstantiable);
   REPORT(get_uninstantiables);
+  REPORT(check_casts);
 
 #undef REPORT
 }
@@ -77,7 +96,6 @@ void RemoveUninstantiablesPass::Stats::report(PassManager& mgr) const {
 RemoveUninstantiablesPass::Stats
 RemoveUninstantiablesPass::replace_uninstantiable_refs(
     cfg::ControlFlowGraph& cfg) {
-  using Insert = cfg::CFGMutation::Insert;
   cfg::CFGMutation m(cfg);
 
   // Lazily generate a scratch register.
@@ -97,7 +115,7 @@ RemoveUninstantiablesPass::replace_uninstantiable_refs(
     case OPCODE_INSTANCE_OF:
       if (type::is_uninstantiable_class(insn->get_type())) {
         auto dest = cfg.move_result_of(it)->insn->dest();
-        m.add_change(Insert::Replacing, it, {ir_const(dest, 0)});
+        m.replace(it, {ir_const(dest, 0)});
         stats.instance_ofs++;
       }
       continue;
@@ -106,8 +124,20 @@ RemoveUninstantiablesPass::replace_uninstantiable_refs(
     case OPCODE_INVOKE_VIRTUAL:
       if (type::is_uninstantiable_class(insn->get_method()->get_class())) {
         auto tmp = get_scratch();
-        m.add_change(Insert::Replacing, it, {ir_const(tmp, 0), ir_throw(tmp)});
+        m.replace(it, {ir_const(tmp, 0), ir_throw(tmp)});
         stats.invokes++;
+      }
+      continue;
+
+    case OPCODE_CHECK_CAST:
+      if (type::is_uninstantiable_class(insn->get_type())) {
+        auto src = insn->src(0);
+        auto dest = cfg.move_result_of(it)->insn->dest();
+        m.replace(it,
+                  {ir_check_cast(src, type::java_lang_Void()),
+                   ir_move_result_pseudo_object(dest), ir_const(src, 0),
+                   ir_const(dest, 0)});
+        stats.check_casts++;
       }
       continue;
 
@@ -118,7 +148,7 @@ RemoveUninstantiablesPass::replace_uninstantiable_refs(
     if ((is_iget(op) || is_iput(op)) &&
         type::is_uninstantiable_class(insn->get_field()->get_class())) {
       auto tmp = get_scratch();
-      m.add_change(Insert::Replacing, it, {ir_const(tmp, 0), ir_throw(tmp)});
+      m.replace(it, {ir_const(tmp, 0), ir_throw(tmp)});
       stats.field_accesses_on_uninstantiable++;
       continue;
     }
@@ -126,7 +156,7 @@ RemoveUninstantiablesPass::replace_uninstantiable_refs(
     if ((is_iget(op) || is_sget(op)) &&
         type::is_uninstantiable_class(insn->get_field()->get_type())) {
       auto dest = cfg.move_result_of(it)->insn->dest();
-      m.add_change(Insert::Replacing, it, {ir_const(dest, 0)});
+      m.replace(it, {ir_const(dest, 0)});
       stats.get_uninstantiables++;
       continue;
     }

@@ -30,6 +30,7 @@
 #include "ProguardPrintConfiguration.h"
 #include "ProguardReporting.h"
 #include "ReachableClasses.h"
+#include "Sanitizers.h"
 #include "Timer.h"
 #include "Walkers.h"
 
@@ -99,7 +100,11 @@ PassManager::PassManager(
     // nonexistent passes are caught as early as possible
     auto pass = find_pass(getenv("PROFILE_PASS"));
     always_assert(pass != nullptr);
-    m_profiler_info = ProfilerInfo(getenv("PROFILE_COMMAND"), pass);
+    boost::optional<std::string> post_cmd = boost::none;
+    if (getenv("PROFILE_POST_COMMAND")) {
+      post_cmd = std::string(getenv("PROFILE_POST_COMMAND"));
+    }
+    m_profiler_info = ProfilerInfo(getenv("PROFILE_COMMAND"), post_cmd, pass);
     fprintf(stderr, "Will run profiler for %s\n", pass->name().c_str());
   }
   if (getenv("MALLOC_PROFILE_PASS")) {
@@ -210,6 +215,8 @@ void PassManager::run_passes(DexStoresVector& stores, ConfigFiles& conf) {
   // Load configurations regarding the scope.
   conf.load(scope);
 
+  sanitizers::lsan_do_recoverable_leak_check();
+
   // TODO(fengliu) : Remove Pass::eval_pass API
   for (size_t i = 0; i < m_activated_passes.size(); ++i) {
     Pass* pass = m_activated_passes[i];
@@ -257,6 +264,8 @@ void PassManager::run_passes(DexStoresVector& stores, ConfigFiles& conf) {
   constexpr visualizer::Options VISUALIZER_PASS_OPTIONS = (visualizer::Options)(
       visualizer::Options::SKIP_NO_CHANGE | visualizer::Options::FORCE_CFG);
 
+  sanitizers::lsan_do_recoverable_leak_check();
+
   for (size_t i = 0; i < m_activated_passes.size(); ++i) {
     Pass* pass = m_activated_passes[i];
     TRACE(PM, 1, "Running %s...", pass->name().c_str());
@@ -264,13 +273,15 @@ void PassManager::run_passes(DexStoresVector& stores, ConfigFiles& conf) {
     m_current_pass_info = &m_pass_info[i];
 
     {
+      bool run_profiler = m_profiler_info && m_profiler_info->pass == pass;
       ScopedCommandProfiling cmd_prof(
-          m_profiler_info && m_profiler_info->pass == pass
-              ? boost::make_optional(m_profiler_info->command)
-              : boost::none);
+          run_profiler ? boost::make_optional(m_profiler_info->command)
+                       : boost::none,
+          run_profiler ? m_profiler_info->post_cmd : boost::none);
       jemalloc_util::ScopedProfiling malloc_prof(m_malloc_profile_pass == pass);
       pass->run_pass(stores, conf, *this);
     }
+    sanitizers::lsan_do_recoverable_leak_check();
     walk::parallel::code(build_class_scope(stores), [](DexMethod* m,
                                                        IRCode& code) {
       // Ensure that pass authors deconstructed the editable CFG at the end of
@@ -318,6 +329,8 @@ void PassManager::run_passes(DexStoresVector& stores, ConfigFiles& conf) {
     std::ofstream outgoing(conf.get_printseeds() + ".outgoing");
     redex::print_classes(outgoing, conf.get_proguard_map(), scope);
   }
+
+  sanitizers::lsan_do_recoverable_leak_check();
 }
 
 void PassManager::activate_pass(const char* name, const Json::Value& conf) {
@@ -325,7 +338,7 @@ void PassManager::activate_pass(const char* name, const Json::Value& conf) {
 
   // Names may or may not have a "#<id>" suffix to indicate their order in the
   // pass list, which needs to be removed for matching.
-  std::string pass_name = name_str.substr(0, name_str.find("#"));
+  std::string pass_name = name_str.substr(0, name_str.find('#'));
   for (auto pass : m_registered_passes) {
     if (pass_name == pass->name()) {
       m_activated_passes.push_back(pass);

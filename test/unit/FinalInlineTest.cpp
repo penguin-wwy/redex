@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <unordered_map>
+#include <utility>
 
 #include "Creators.h"
 #include "DexAnnotation.h"
@@ -133,7 +134,7 @@ DexField* add_concrete_field(DexClass* cls,
   auto field_name = DexString::make_string(name);
   auto field =
       static_cast<DexField*>(DexField::make_field(container, field_name, type));
-  auto ev = make_ev(type, val);
+  auto ev = make_ev(type, std::move(val));
   field->make_concrete(ACC_PUBLIC | ACC_STATIC | ACC_FINAL, ev);
   cls->add_field(field);
   return field;
@@ -191,7 +192,7 @@ TEST_F(ConstPropTest, simplePropagate) {
       {"byte", m_byte_type, static_cast<uint64_t>('b')},
       {"char", m_char_type, static_cast<uint64_t>('c')},
       {"short", m_short_type, static_cast<uint64_t>(256)}};
-  for (auto test_case : test_cases) {
+  for (const auto& test_case : test_cases) {
     auto parent = create_class("Lcom/redex/Parent_" + test_case.name + ";");
     auto parent_field =
         add_concrete_field(parent, "CONST", test_case.type, test_case.value);
@@ -245,7 +246,7 @@ TEST_F(ConstPropTest, simplePropagateMultiField) {
       {"CONST_STRING", m_string_type, DexString::make_string("foo")}};
   auto parent = create_class("Lcom/redex/Parent;");
   auto child = create_class("Lcom/redex/Child;");
-  for (auto fd : field_descs) {
+  for (const auto& fd : field_descs) {
     auto parent_field = add_concrete_field(parent, fd.name, fd.type, fd.value);
     add_dependent_field(child, fd.name, parent_field);
   }
@@ -254,7 +255,7 @@ TEST_F(ConstPropTest, simplePropagateMultiField) {
       classes, /*string*/ true, /*wide*/ true);
 
   expect_empty_clinit(child);
-  for (auto fd : field_descs) {
+  for (const auto& fd : field_descs) {
     expect_field_eq(child, fd.name, fd.type, fd.value);
   }
 }
@@ -289,7 +290,7 @@ TEST_F(ConstPropTest, simplePropagateMultiFieldNoWide) {
       {"CONST_STRING", m_string_type, DexString::make_string("foo")}};
   auto parent = create_class("Lcom/redex/Parent;");
   auto child = create_class("Lcom/redex/Child;");
-  for (auto fd : field_descs) {
+  for (const auto& fd : field_descs) {
     auto parent_field = add_concrete_field(parent, fd.name, fd.type, fd.value);
     add_dependent_field(child, fd.name, parent_field);
   }
@@ -298,7 +299,7 @@ TEST_F(ConstPropTest, simplePropagateMultiFieldNoWide) {
       classes, /*string*/ true, /*wide*/ false);
 
   expect_empty_clinit(child);
-  for (auto fd : field_descs) {
+  for (const auto& fd : field_descs) {
     expect_field_eq(child, fd.name, fd.type, fd.value);
   }
 }
@@ -351,7 +352,7 @@ TEST_F(ConstPropTest, multiLevelPropagate) {
   auto parent = create_class("Lcom/redex/Parent;");
   auto child = create_class("Lcom/redex/Child;");
   auto grandchild = create_class("Lcom/redex/GrandChild;");
-  for (auto fd : field_descs) {
+  for (const auto& fd : field_descs) {
     auto parent_field = add_concrete_field(parent, fd.name, fd.type, fd.value);
     auto child_field = add_dependent_field(child, fd.name, parent_field);
     add_dependent_field(grandchild, fd.name, child_field);
@@ -364,7 +365,7 @@ TEST_F(ConstPropTest, multiLevelPropagate) {
   std::vector<DexClass*> descendants = {child, grandchild};
   for (auto clazz : descendants) {
     expect_empty_clinit(clazz);
-    for (auto fd : field_descs) {
+    for (const auto& fd : field_descs) {
       expect_field_eq(clazz, fd.name, fd.type, fd.value);
     }
   }

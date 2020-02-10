@@ -53,6 +53,14 @@ class RangeSet {
     return m_range_vec.end();
   }
   size_t size() const { return m_range_vec.size(); }
+  // Changes order, preferring instructions with more src registers
+  void prioritize() {
+    std::stable_sort(m_range_vec.begin(),
+                     m_range_vec.end(),
+                     [](IRInstruction* a, IRInstruction* b) {
+                       return a->srcs_size() > b->srcs_size();
+                     });
+  }
 
  private:
   std::vector<IRInstruction*> m_range_vec;
@@ -244,7 +252,7 @@ class Graph {
  * the given IROpcode when it is converted to a DexInstruction in the
  * instruction lowering process.
  */
-size_t dest_bit_width(IRList::iterator it);
+size_t dest_bit_width(const IRList::iterator& it);
 
 /*
  * The largest valid register that we can map the symreg in insn->src(src_index)
@@ -264,7 +272,7 @@ inline uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
  * limited public interface.
  */
 class GraphBuilder {
-  static void update_node_constraints(IRList::iterator,
+  static void update_node_constraints(const IRList::iterator&,
                                       const RangeSet&,
                                       Graph*);
 

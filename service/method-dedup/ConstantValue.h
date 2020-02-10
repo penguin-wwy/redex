@@ -36,15 +36,17 @@ class ConstantValue {
   // INVALID:
   //        Whenever the annotated value cannot be processed. For instance, the
   //        emitted Type cannot be found or is not merged.
-  enum ConstantKind { INT, TYPE, STRING, INVALID };
+  //
+  // Note: must be an enum class to not shadow TYPE used in Trace.
+  enum class ConstantKind { INT, TYPE, STRING, INVALID };
 
  public:
   // The insn and the dest. OPCODE_CONST_STRING does not have a dest in itself.
   using ConstantLoad = std::pair<IRInstruction*, reg_t>;
 
   ConstantValue(const TypeTags* type_tags,
-                const std::string kind_str,
-                const std::string val_str,
+                const std::string& kind_str,
+                const std::string& val_str,
                 reg_t param_reg);
 
   bool is_int_value() const {
@@ -103,8 +105,8 @@ class ConstantValues {
 
  public:
   ConstantValues(const TypeTags* type_tags,
-                 const std::string kinds_str,
-                 const std::string vals_str,
+                 const std::string& kinds_str,
+                 const std::string& vals_str,
                  const size_t stud_method_threshold,
                  IRCode* code);
 

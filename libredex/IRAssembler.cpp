@@ -420,7 +420,7 @@ std::unique_ptr<DexPosition> position_from_s_expr(
  */
 void handle_labels(IRCode* code,
                    const LabelDefs& label_defs,
-                   const LabelRefs label_refs) {
+                   const LabelRefs& label_refs) {
   for (auto& mie : InstructionIterable(code)) {
     auto* insn = mie.insn;
     if (label_refs.count(insn)) {
@@ -741,7 +741,7 @@ std::unique_ptr<IRCode> ircode_from_s_expr(const s_expr& e) {
         // check if keyword also has dbg label
         if (keyword != ".pos") {
           // get dbg label found after colon in keyword string
-          auto key = keyword.substr(keyword.find(":") + 1);
+          auto key = keyword.substr(keyword.find(':') + 1);
           // insert pos into positions map using dbg label as key
           positions[key] = pos.get();
         }

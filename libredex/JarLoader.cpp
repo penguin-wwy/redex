@@ -8,6 +8,7 @@
 #include <boost/iostreams/device/mapped_file.hpp>
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 #include <zlib.h>
 
@@ -421,7 +422,7 @@ static bool parse_class(uint8_t* buffer,
   uint16_t fcount = read16(buffer);
 
   auto invoke_attr_hook =
-      [&](boost::variant<DexField*, DexMethod*> field_or_method,
+      [&](const boost::variant<DexField*, DexMethod*>& field_or_method,
           uint8_t* attrPtr) {
         if (attr_hook == nullptr) {
           return;
@@ -755,7 +756,7 @@ static bool process_jar_entries(const char* location,
                                 std::vector<jar_entry>& files,
                                 const uint8_t* mapping,
                                 Scope* classes,
-                                attribute_hook_t attr_hook) {
+                                const attribute_hook_t& attr_hook) {
   ssize_t bufsize = kStartBufferSize;
   uint8_t* outbuffer = (uint8_t*)malloc(bufsize);
   static char classEndString[] = ".class";
@@ -796,7 +797,7 @@ static bool process_jar(const char* location,
                         const uint8_t* mapping,
                         ssize_t size,
                         Scope* classes,
-                        attribute_hook_t attr_hook) {
+                        const attribute_hook_t& attr_hook) {
   pk_cdir_end pce;
   std::vector<jar_entry> files;
   if (!find_central_directory(mapping, size, pce)) return false;
@@ -810,7 +811,7 @@ static bool process_jar(const char* location,
 
 bool load_jar_file(const char* location,
                    Scope* classes,
-                   attribute_hook_t attr_hook) {
+                   const attribute_hook_t& attr_hook) {
   boost::iostreams::mapped_file file;
   try {
     file.open(location, boost::iostreams::mapped_file::readonly);

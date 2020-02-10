@@ -415,7 +415,7 @@ class EnumUpcastDetector {
   }
 
   void reject(const IRInstruction* insn,
-              std::unordered_set<DexType*> types,
+              const std::unordered_set<DexType*>& types,
               ConcurrentSet<DexType*>* rejected_enums,
               Reason reason = UNKNOWN) const {
     for (DexType* type : types) {
@@ -424,7 +424,7 @@ class EnumUpcastDetector {
   }
 
   void reject(const IRInstruction* insn,
-              EnumTypes types,
+              const EnumTypes& types,
               ConcurrentSet<DexType*>* rejected_enums,
               Reason reason = UNKNOWN) const {
     for (DexType* type : types.elements()) {
@@ -486,7 +486,7 @@ namespace optimize_enums {
  * Analyze all the instructions that may involve object or type and handle
  * possible candidate enums specificly.
  */
-void EnumFixpointIterator::analyze_instruction(IRInstruction* insn,
+void EnumFixpointIterator::analyze_instruction(const IRInstruction* insn,
                                                EnumTypeEnvironment* env) const {
   const bool use_result = insn->has_move_result_any();
   if (use_result || insn->has_dest()) {

@@ -30,47 +30,6 @@ namespace mog = method_override_graph;
 
 namespace {
 
-static bool can_inline_init(DexMethod* caller, IRCode& code) {
-  always_assert(method::is_init(caller));
-  // Check that there is no call to a super constructor, and no assignments to
-  // (non-inherited) instance fields before constructor call.
-  // (There not being such a super call implies that there must be a call to
-  // another constructor in the same class, unless the method doesn't return;
-  // calls to other constructors in the same class are inlinable.)
-  // The check doesn't take into account data-flow, i.e. whether the super
-  // constructor call and the field assignments are actually on the incoming
-  // receiver object. In that sense, this function is overly conservative, and
-  // there is room for futher improvement.
-  DexType* declaring_type = caller->get_class();
-  DexType* super_type = type_class(declaring_type)->get_super_class();
-  for (auto& mie : InstructionIterable(code)) {
-    IRInstruction* insn = mie.insn;
-    auto opcode = insn->opcode();
-
-    // give up if there's an assignment to a field of the declaring class
-    if (is_iput(opcode) && insn->get_field()->get_class() == declaring_type) {
-      return false;
-    }
-
-    // give up if there's a call to a constructor of the super class
-    if (opcode != OPCODE_INVOKE_DIRECT) {
-      continue;
-    }
-    DexMethod* callee =
-        resolve_method(insn->get_method(), MethodSearch::Direct);
-    if (callee == nullptr) {
-      return false;
-    }
-    if (!method::is_init(callee)) {
-      continue;
-    }
-    if (callee->get_class() == super_type) {
-      return false;
-    }
-  }
-  return true;
-}
-
 /**
  * Collect all non virtual methods and make all small methods candidates
  * for inlining.
@@ -103,7 +62,7 @@ std::unordered_set<DexMethod*> gather_non_virtual_methods(Scope& scope,
     if (code == nullptr) direct_no_code++;
     if (method::is_constructor(method)) {
       (is_static(method)) ? clinit++ : init++;
-      if (method::is_clinit(method) || !can_inline_init(method, *code)) {
+      if (method::is_clinit(method)) {
         dont_inline = true;
       }
     } else {
@@ -368,8 +327,13 @@ void run_inliner(DexStoresVector& stores,
 
   auto methods =
       gather_non_virtual_methods(scope, inliner_config.virtual_inline);
-  std::unordered_map<const DexMethod*, size_t> same_method_implementations;
 
+  // The methods list computed above includes all constructors, regardless of
+  // whether it's safe to inline them or not. We'll let the inliner decide
+  // what to do with constructors.
+  bool analyze_and_prune_inits = true;
+
+  std::unordered_map<const DexMethod*, size_t> same_method_implementations;
   if (inliner_config.virtual_inline && inliner_config.true_virtual_inline) {
     gather_true_virtual_methods(scope, &true_virtual_callers, &methods,
                                 &same_method_implementations);
@@ -389,7 +353,8 @@ void run_inliner(DexStoresVector& stores,
   MultiMethodInliner inliner(scope, stores, methods, resolver, inliner_config,
                              intra_dex ? IntraDex : InterDex,
                              true_virtual_callers, method_profile_stats,
-                             same_method_implementations);
+                             same_method_implementations,
+                             analyze_and_prune_inits);
   inliner.inline_methods();
 
   if (inliner_config.use_cfg_inliner) {
@@ -400,6 +365,12 @@ void run_inliner(DexStoresVector& stores,
   // delete all methods that can be deleted
   auto inlined = inliner.get_inlined();
   size_t inlined_count = inlined.size();
+  size_t inlined_init_count = 0;
+  for (DexMethod* m : inlined) {
+    if (method::is_init(m)) {
+      inlined_init_count++;
+    }
+  }
 
   // Do not erase true virtual methods that are inlined because we are only
   // inlining callsites that are monomorphic, for polymorphic callsite we
@@ -441,6 +412,7 @@ void run_inliner(DexStoresVector& stores,
   TRACE(INLINE, 3, "not found %ld", (size_t)inliner.get_info().not_found);
   TRACE(INLINE, 3, "caller too large %ld",
         (size_t)inliner.get_info().caller_too_large);
+  TRACE(INLINE, 3, "inlined ctors %zu", inlined_init_count);
   TRACE(INLINE, 1, "%ld inlined calls over %ld methods and %ld methods removed",
         (size_t)inliner.get_info().calls_inlined, inlined_count, deleted);
 
@@ -448,6 +420,7 @@ void run_inliner(DexStoresVector& stores,
   mgr.incr_metric("max_call_stack_depth",
                   inliner.get_info().max_call_stack_depth);
   mgr.incr_metric("caller_too_large", inliner.get_info().caller_too_large);
+  mgr.incr_metric("inlined_init_count", inlined_init_count);
   mgr.incr_metric("calls_inlined", inliner.get_info().calls_inlined);
   mgr.incr_metric("methods_removed", deleted);
   mgr.incr_metric("escaped_virtual", inliner.get_info().escaped_virtual);
@@ -483,5 +456,7 @@ void run_inliner(DexStoresVector& stores,
       "instructions_eliminated_localdce",
       inliner.get_local_dce_stats().dead_instruction_count +
           inliner.get_local_dce_stats().unreachable_instruction_count);
+  mgr.incr_metric("blocks_eliminated_by_dedup_blocks",
+                  inliner.get_dedup_blocks_stats().blocks_removed);
 }
 } // namespace inliner

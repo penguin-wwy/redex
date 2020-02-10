@@ -50,7 +50,7 @@ void Configurable::parse_config(const JsonWrapper& json) {
          const bool param_is_required, const bindflags_t param_bindflags,
          const Configurable::ReflectionParam::Type param_type_tag,
          const std::tuple<std::string, Configurable::Reflection>& param_type,
-         const Json::Value default_value) {};
+         const Json::Value& default_value) {};
   m_parser = [&json](const std::string& name) {
     // TODO: add std::string API for contains
     if (json.contains(name.c_str())) {
@@ -83,7 +83,7 @@ Configurable::Reflection Configurable::reflect() {
                       const Configurable::ReflectionParam::Type param_type_tag,
                       const std::tuple<std::string, Configurable::Reflection>&
                           param_type,
-                      const Json::Value default_value) {
+                      const Json::Value& default_value) {
     switch (param_type_tag) {
     case Configurable::ReflectionParam::Type::PRIMITIVE:
       cr.params[param_name] = Configurable::ReflectionParam(
@@ -225,6 +225,17 @@ std::vector<std::string> Configurable::as<std::vector<std::string>>(
 }
 
 template <>
+std::vector<unsigned int> Configurable::as<std::vector<unsigned int>>(
+    const Json::Value& value, bindflags_t bindflags) {
+  ASSERT_NO_BINDFLAGS(std::vector<unsigned int>);
+  std::vector<unsigned int> result;
+  for (const auto& str : value) {
+    result.push_back(str.asUInt());
+  }
+  return result;
+}
+
+template <>
 std::unordered_set<std::string>
 Configurable::as<std::unordered_set<std::string>>(const Json::Value& value,
                                                   bindflags_t bindflags) {
@@ -267,6 +278,21 @@ std::vector<DexType*> Configurable::as<std::vector<DexType*>>(
           "\"%s\" failed to resolve to a known type\n", str.asString().c_str());
     } else {
       result.emplace_back(static_cast<DexType*>(type));
+    }
+  }
+  return result;
+}
+
+template <>
+std::vector<DexMethod*> Configurable::as<std::vector<DexMethod*>>(
+    const Json::Value& value, bindflags_t bindflags) {
+  always_assert_log(!(bindflags & ~Configurable::bindflags::types::mask),
+                    "Only method bindflags may be specified for a "
+                    "std::vector<DexMethod*>");
+  std::vector<DexMethod*> result;
+  for (auto& str : value) {
+    if (auto meth = parse_method(str, bindflags)) {
+      result.emplace_back(meth);
     }
   }
   return result;
@@ -392,7 +418,7 @@ Configurable::as<Configurable::MapOfVectorOfStrings>(const Json::Value& value,
     if (!v.isArray()) {
       throw std::runtime_error("expected array, got:" + v.asString());
     }
-    for (auto el : v) {
+    for (const auto& el : v) {
       if (!el.isString()) {
         throw std::runtime_error("expected string, got:" + el.asString());
       }
@@ -423,13 +449,13 @@ Json::Value Configurable::as<Json::Value>(const Json::Value& value,
               Json::nullValue);                                                \
   }
 
-#define IMPLEMENT_REFLECTOR_EX(type, type_name)                              \
+#define IMPLEMENT_REFLECTOR_EX(T, type_name)                                 \
   template <>                                                                \
   void Configurable::reflect(                                                \
       ReflectorFunc& reflector, const std::string& param_name,               \
       const std::string& param_doc, const bool param_is_required,            \
-      const Configurable::bindflags_t param_bindflags, type& param,          \
-      type default_value) {                                                  \
+      const Configurable::bindflags_t param_bindflags, T& param,             \
+      typename DefaultValueType<T>::type default_value) {                    \
     param = default_value;                                                   \
     reflector(                                                               \
         param_name, param_doc, param_is_required, param_bindflags,           \
@@ -438,18 +464,18 @@ Json::Value Configurable::as<Json::Value>(const Json::Value& value,
         Json::nullValue);                                                    \
   }
 
-#define IMPLEMENT_REFLECTOR_WITH_DFLT_VALUE(type)                              \
-  template <>                                                                  \
-  void Configurable::reflect(                                                  \
-      ReflectorFunc& reflector, const std::string& param_name,                 \
-      const std::string& param_doc, const bool param_is_required,              \
-      const Configurable::bindflags_t param_bindflags, type& param,            \
-      type default_value) {                                                    \
-    param = default_value;                                                     \
-    reflector(param_name, param_doc, param_is_required, param_bindflags,       \
-              Configurable::ReflectionParam::PRIMITIVE,                        \
-              std::make_tuple(std::string{#type}, Configurable::Reflection()), \
-              Json::Value(default_value));                                     \
+#define IMPLEMENT_REFLECTOR_WITH_DFLT_VALUE(T)                              \
+  template <>                                                               \
+  void Configurable::reflect(                                               \
+      ReflectorFunc& reflector, const std::string& param_name,              \
+      const std::string& param_doc, const bool param_is_required,           \
+      const Configurable::bindflags_t param_bindflags, T& param,            \
+      typename DefaultValueType<T>::type default_value) {                   \
+    param = default_value;                                                  \
+    reflector(param_name, param_doc, param_is_required, param_bindflags,    \
+              Configurable::ReflectionParam::PRIMITIVE,                     \
+              std::make_tuple(std::string{#T}, Configurable::Reflection()), \
+              Json::Value(default_value));                                  \
   }
 
 IMPLEMENT_REFLECTOR(float)
@@ -467,8 +493,10 @@ IMPLEMENT_REFLECTOR_EX(std::string, "string")
 IMPLEMENT_REFLECTOR_EX(Json::Value, "json")
 IMPLEMENT_REFLECTOR_EX(boost::optional<std::string>, "string")
 IMPLEMENT_REFLECTOR_EX(std::vector<std::string>, "list")
+IMPLEMENT_REFLECTOR_EX(std::vector<unsigned int>, "list")
 IMPLEMENT_REFLECTOR_EX(std::unordered_set<std::string>, "set")
 IMPLEMENT_REFLECTOR_EX(std::vector<DexType*>, "list")
+IMPLEMENT_REFLECTOR_EX(std::vector<DexMethod*>, "list")
 IMPLEMENT_REFLECTOR_EX(std::unordered_set<const DexType*>, "set")
 IMPLEMENT_REFLECTOR_EX(std::unordered_set<DexType*>, "set")
 IMPLEMENT_REFLECTOR_EX(std::unordered_set<DexClass*>, "set")

@@ -16,9 +16,13 @@
 
 #include "AbstractDomain.h"
 #include "FixpointIterator.h"
+#include "SpartaWorkQueue.h"
+#include "WeakPartialOrdering.h"
 #include "WeakTopologicalOrdering.h"
 
 namespace sparta {
+
+namespace fp_impl {
 
 /*
  * This data structure contains the current state of the fixpoint iteration,
@@ -52,9 +56,18 @@ class MonotonicFixpointIteratorContext final {
     return it->second;
   }
 
- private:
   explicit MonotonicFixpointIteratorContext(const Domain& init)
       : m_init(init) {}
+
+  explicit MonotonicFixpointIteratorContext(
+      const Domain& init, const std::unordered_set<NodeId>& nodes)
+      : m_init(init) {
+    // Pre-populate hash table for all the nodes.
+    for (auto& node : nodes) {
+      m_global_iterations[node] = 0;
+      m_local_iterations[node] = 0;
+    }
+  }
 
   const Domain& get_initial_value() const { return m_init; }
 
@@ -73,31 +86,23 @@ class MonotonicFixpointIteratorContext final {
   }
 
   void reset_local_iteration_count_for(const NodeId& node) {
-    m_local_iterations.erase(node);
+    m_local_iterations[node] = 0;
   }
 
+ private:
   const Domain& m_init;
   std::unordered_map<NodeId, uint32_t, NodeHash> m_global_iterations;
   std::unordered_map<NodeId, uint32_t, NodeHash> m_local_iterations;
-
-  template <typename T1, typename T2, typename T3>
-  friend class MonotonicFixpointIterator;
 };
 
 /*
- * This is the implementation of a monotonically increasing chaotic fixpoint
- * iteration sequence with widening over a control-flow graph (CFG) using the
- * recursive iteration strategy induced by a weak topological ordering of the
- * nodes in the control-flow graph. The recursive iteration strategy is
- * described in Bourdoncle's paper on weak topological orderings:
- *
- *   F. Bourdoncle. Efficient chaotic iteration strategies with widenings.
- *   In Formal Methods in Programming and Their Applications, pp 128-141.
+ * Shared by MonotonicFixpointIterator and ParallelMonotonicFixpointIterator,
+ * do not use directly.
  */
 template <typename GraphInterface,
           typename Domain,
           typename NodeHash = std::hash<typename GraphInterface::NodeId>>
-class MonotonicFixpointIterator
+class MonotonicFixpointIteratorBase
     : public FixpointIterator<GraphInterface, Domain> {
  public:
   using Graph = typename GraphInterface::Graph;
@@ -110,20 +115,8 @@ class MonotonicFixpointIterator
    * the constructor, so as to prevent unnecessary resizing of the underlying
    * hashtables during the iteration.
    */
-  MonotonicFixpointIterator(const Graph& graph, size_t cfg_size_hint = 4)
+  MonotonicFixpointIteratorBase(const Graph& graph, size_t cfg_size_hint = 4)
       : m_graph(graph),
-        m_wto(GraphInterface::entry(graph),
-              [=, &graph](const NodeId& x) {
-                const auto& succ_edges = GraphInterface::successors(graph, x);
-                std::vector<NodeId> succ_nodes;
-                std::transform(succ_edges.begin(),
-                               succ_edges.end(),
-                               std::back_inserter(succ_nodes),
-                               std::bind(&GraphInterface::target,
-                                         std::ref(graph),
-                                         std::placeholders::_1));
-                return succ_nodes;
-              }),
         m_entry_states(cfg_size_hint),
         m_exit_states(cfg_size_hint) {}
 
@@ -146,20 +139,6 @@ class MonotonicFixpointIterator
       current_state->join_with(new_state);
     } else {
       current_state->widen_with(new_state);
-    }
-  }
-
-  /*
-   * Executes the fixpoint iterator given an abstract value describing the
-   * initial program configuration. This method can be invoked multiple times
-   * with different values in order to analyze the program under different
-   * initial conditions.
-   */
-  void run(const Domain& init) {
-    clear();
-    Context context(init);
-    for (const WtoComponent<NodeId>& component : m_wto) {
-      analyze_component(&context, component);
     }
   }
 
@@ -193,10 +172,17 @@ class MonotonicFixpointIterator
     return (it == m_exit_states.end()) ? Domain::bottom() : it->second;
   }
 
- private:
   void clear() {
     m_entry_states.clear();
     m_exit_states.clear();
+  }
+
+  void set_all_to_bottom(std::unordered_set<NodeId>& all_nodes) {
+    // Pre-populate entry and exit states for all nodes.
+    for (auto& node : all_nodes) {
+      m_entry_states[node] = Domain::bottom();
+      m_exit_states[node] = Domain::bottom();
+    }
   }
 
   void compute_entry_state(Context* context,
@@ -209,15 +195,6 @@ class MonotonicFixpointIterator
     for (EdgeId edge : GraphInterface::predecessors(m_graph, node)) {
       placeholder->join_with(this->analyze_edge(
           edge, get_exit_state_at(GraphInterface::source(m_graph, edge))));
-    }
-  }
-
-  void analyze_component(Context* context,
-                         const WtoComponent<NodeId>& component) {
-    if (component.is_vertex()) {
-      analyze_vertex(context, component.head_node());
-    } else {
-      analyze_scc(context, component);
     }
   }
 
@@ -237,12 +214,82 @@ class MonotonicFixpointIterator
     this->analyze_node(node, &exit_state);
   }
 
+  const Graph& m_graph;
+  std::unordered_map<NodeId, Domain, NodeHash> m_entry_states;
+  std::unordered_map<NodeId, Domain, NodeHash> m_exit_states;
+};
+
+} // namespace fp_impl
+
+/*
+ * This is the implementation of a monotonically increasing chaotic fixpoint
+ * iteration sequence with widening over a control-flow graph (CFG) using the
+ * recursive iteration strategy induced by a weak topological ordering of the
+ * nodes in the control-flow graph. The recursive iteration strategy is
+ * described in Bourdoncle's paper on weak topological orderings:
+ *
+ *   F. Bourdoncle. Efficient chaotic iteration strategies with widenings.
+ *   In Formal Methods in Programming and Their Applications, pp 128-141.
+ */
+template <typename GraphInterface,
+          typename Domain,
+          typename NodeHash = std::hash<typename GraphInterface::NodeId>>
+class WTOMonotonicFixpointIterator
+    : public fp_impl::
+          MonotonicFixpointIteratorBase<GraphInterface, Domain, NodeHash> {
+ public:
+  using Graph = typename GraphInterface::Graph;
+  using NodeId = typename GraphInterface::NodeId;
+  using EdgeId = typename GraphInterface::EdgeId;
+  using Context =
+      fp_impl::MonotonicFixpointIteratorContext<NodeId, Domain, NodeHash>;
+
+  WTOMonotonicFixpointIterator(const Graph& graph, size_t cfg_size_hint = 4)
+      : fp_impl::MonotonicFixpointIteratorBase<GraphInterface,
+                                               Domain,
+                                               NodeHash>(graph, cfg_size_hint),
+        m_wto(GraphInterface::entry(graph), [=, &graph](const NodeId& x) {
+          const auto& succ_edges = GraphInterface::successors(graph, x);
+          std::vector<NodeId> succ_nodes;
+          std::transform(succ_edges.begin(),
+                         succ_edges.end(),
+                         std::back_inserter(succ_nodes),
+                         std::bind(&GraphInterface::target,
+                                   std::ref(graph),
+                                   std::placeholders::_1));
+          return succ_nodes;
+        }) {}
+
+  /*
+   * Executes the fixpoint iterator given an abstract value describing the
+   * initial program configuration. This method can be invoked multiple times
+   * with different values in order to analyze the program under different
+   * initial conditions.
+   */
+  void run(const Domain& init) {
+    this->clear();
+    Context context(init);
+    for (const WtoComponent<NodeId>& component : m_wto) {
+      analyze_component(&context, component);
+    }
+  }
+
+ private:
+  void analyze_component(Context* context,
+                         const WtoComponent<NodeId>& component) {
+    if (component.is_vertex()) {
+      this->analyze_vertex(context, component.head_node());
+    } else {
+      analyze_scc(context, component);
+    }
+  }
+
   void analyze_scc(Context* context, const WtoComponent<NodeId>& scc) {
     NodeId head = scc.head_node();
     bool iterate = true;
     for (context->reset_local_iteration_count_for(head); iterate;
          context->increase_iteration_count_for(head)) {
-      analyze_vertex(context, head);
+      this->analyze_vertex(context, head);
       for (const auto& component : scc) {
         analyze_component(context, component);
       }
@@ -250,9 +297,9 @@ class MonotonicFixpointIterator
       // slot associated with the head node in the hash table of entry states.
       // The state is updated in place within the hash table via side effects,
       // which avoids costly copies and allocations.
-      Domain* current_state = &m_entry_states[head];
+      Domain* current_state = &this->m_entry_states[head];
       Domain new_state;
-      compute_entry_state(context, head, &new_state);
+      this->compute_entry_state(context, head, &new_state);
       if (new_state.leq(*current_state)) {
         // At this point we know that the monotonic iteration sequence has
         // converged and current_state is a post-fixpoint. However, since all
@@ -265,15 +312,324 @@ class MonotonicFixpointIterator
         *current_state = std::move(new_state);
         iterate = false;
       } else {
-        extrapolate(*context, head, current_state, new_state);
+        this->extrapolate(*context, head, current_state, new_state);
+      }
+    }
+  }
+  WeakTopologicalOrdering<NodeId, NodeHash> m_wto;
+};
+
+class WPOCounter {
+ public:
+  void init(uint32_t size) {
+    for (uint32_t idx = 0; idx < size; ++idx) {
+      m_counter[idx] = 0;
+    }
+  }
+
+  std::atomic<uint32_t>& value_at(uint32_t wpo_idx) {
+    return m_counter[wpo_idx];
+  }
+
+ private:
+  std::unordered_map<uint32_t, std::atomic<uint32_t>> m_counter;
+};
+
+/*
+ * Implementation of a deterministic concurrent fixpoint algorithm for weak
+ * partial ordering (WPO) of a rooted directed graph, as described in the paper:
+ *
+ *   Sung Kook Kim, Arnaud J. Venet, and Aditya V. Thakur.
+ *   Deterministic Parallel Fixpoint Computation. To appear in POPL 2020
+ *
+ *   Preprint: https://arxiv.org/abs/1909.05951
+ *
+ * Authors: Sung Kook Kim, Aditya V. Thakur.
+ */
+template <typename GraphInterface,
+          typename Domain,
+          typename NodeHash = std::hash<typename GraphInterface::NodeId>>
+class ParallelMonotonicFixpointIterator
+    : public fp_impl::
+          MonotonicFixpointIteratorBase<GraphInterface, Domain, NodeHash> {
+ public:
+  using Graph = typename GraphInterface::Graph;
+  using NodeId = typename GraphInterface::NodeId;
+  using EdgeId = typename GraphInterface::EdgeId;
+  using Context =
+      fp_impl::MonotonicFixpointIteratorContext<NodeId, Domain, NodeHash>;
+  using WPOWorkQueue = SpartaWorkQueue<uint32_t>;
+  using WPOWorkerState = SpartaWorkerState<uint32_t>;
+
+  ParallelMonotonicFixpointIterator(
+      const Graph& graph, size_t num_thread = parallel::default_num_threads())
+      : fp_impl::
+            MonotonicFixpointIteratorBase<GraphInterface, Domain, NodeHash>(
+                graph, /*cfg_size_hint*/ 4),
+        m_wpo(GraphInterface::entry(graph),
+              [=, &graph](const NodeId& x) {
+                const auto& succ_edges = GraphInterface::successors(graph, x);
+                std::vector<NodeId> succ_nodes_tmp;
+                std::transform(succ_edges.begin(),
+                               succ_edges.end(),
+                               std::back_inserter(succ_nodes_tmp),
+                               std::bind(&GraphInterface::target,
+                                         std::ref(graph),
+                                         std::placeholders::_1));
+                // Filter out duplicate succ nodes.
+                std::vector<NodeId> succ_nodes;
+                std::unordered_set<NodeId> succ_nodes_set;
+                for (auto node : succ_nodes_tmp) {
+                  if (!succ_nodes_set.count(node)) {
+                    succ_nodes_set.emplace(node);
+                    succ_nodes.emplace_back(node);
+                  }
+                }
+                return succ_nodes;
+              },
+              false),
+        m_num_thread(num_thread) {
+    // Gathering all reachable nodes in graph.
+    std::stack<NodeId> node_queue;
+    node_queue.push(GraphInterface::entry(graph));
+    m_all_nodes.emplace(GraphInterface::entry(graph));
+    while (!node_queue.empty()) {
+      auto node = node_queue.top();
+      node_queue.pop();
+      for (auto& edge : GraphInterface::successors(graph, node)) {
+        auto target = GraphInterface::target(graph, edge);
+        if (!m_all_nodes.count(target)) {
+          m_all_nodes.emplace(target);
+          node_queue.push(target);
+        }
       }
     }
   }
 
-  const Graph& m_graph;
-  WeakTopologicalOrdering<NodeId, NodeHash> m_wto;
-  std::unordered_map<NodeId, Domain, NodeHash> m_entry_states;
-  std::unordered_map<NodeId, Domain, NodeHash> m_exit_states;
+  /*
+   * Executes the fixpoint iterator given an abstract value describing the
+   * initial program configuration. This method can be invoked multiple times
+   * with different values in order to analyze the program under different
+   * initial conditions.
+   */
+  void run(const Domain& init) {
+    this->set_all_to_bottom(m_all_nodes);
+    Context context(init, m_all_nodes);
+    m_wpo_counter.init(m_wpo.size());
+    auto entry_idx = m_wpo.get_entry();
+    assert(m_wpo.get_num_preds(entry_idx) == 0);
+    // Prepare work queue.
+    WPOWorkQueue wq(
+        [&context, &entry_idx, this](WPOWorkerState* worker_state,
+                                     uint32_t wpo_idx) {
+          std::atomic<uint32_t>& current_counter =
+              m_wpo_counter.value_at(wpo_idx);
+          current_counter = 0;
+          // NonExit node
+          if (!m_wpo.is_exit(wpo_idx)) {
+            this->analyze_vertex(&context, m_wpo.get_node(wpo_idx));
+            for (auto succ_idx : m_wpo.get_successors(wpo_idx)) {
+              std::atomic<uint32_t>& succ_counter =
+                  m_wpo_counter.value_at(succ_idx);
+              // Increase succ node's counter, push succ nodes in work queue if
+              // their counter number matches their NumSchedPreds.
+              if (++succ_counter == m_wpo.get_num_preds(succ_idx)) {
+                worker_state->push_task(succ_idx);
+              }
+            }
+            return nullptr;
+          }
+          // Exit node
+          // Check if component of the exit node has stablized.
+          auto head_idx = m_wpo.get_head_of_exit(wpo_idx);
+          NodeId head = m_wpo.get_node(head_idx);
+          Domain* current_state = &this->m_entry_states[head];
+          Domain new_state;
+          this->compute_entry_state(&context, head, &new_state);
+          if (new_state.leq(*current_state)) {
+            // Component stablized.
+            context.reset_local_iteration_count_for(head);
+            *current_state = std::move(new_state);
+            for (auto succ_idx : m_wpo.get_successors(wpo_idx)) {
+              std::atomic<uint32_t>& succ_counter =
+                  m_wpo_counter.value_at(succ_idx);
+              // Increase succ node's counter, push succ nodes in work queue if
+              // their counter number matches their NumSchedPreds.
+              if (++succ_counter == m_wpo.get_num_preds(succ_idx)) {
+                worker_state->push_task(succ_idx);
+              }
+            }
+          } else {
+            // Component didn't stablize.
+            this->extrapolate(context, head, current_state, new_state);
+            context.increase_iteration_count_for(head);
+            // Set component nodes v's counter to their
+            // NumOuterSchedPreds(v, wpo_idx)
+            for (auto pred_pair : m_wpo.get_num_outer_preds(wpo_idx)) {
+              auto component_idx = pred_pair.first;
+              assert(component_idx != entry_idx);
+              std::atomic<uint32_t>& component_counter =
+                  m_wpo_counter.value_at(component_idx);
+              component_counter = pred_pair.second;
+              // Push component nodes in work queue if their counter number
+              // matches their NumSchedPreds.
+              if (m_wpo_counter.value_at(component_idx) ==
+                  m_wpo.get_num_preds(component_idx)) {
+                worker_state->push_task(component_idx);
+              }
+            }
+            if (head_idx == entry_idx) {
+              // Handle special case when there is a loop on entry node.
+              // Because entry node have num_preds = 0, and for
+              // get_num_outer_preds the nodes with num_outer_preds are ignored.
+              // So we need to manually add entry node back to work queue if
+              // the component didn't stablize.
+              worker_state->push_task(head_idx);
+            }
+          }
+          return nullptr;
+        },
+        m_num_thread);
+    wq.add_item(m_wpo.get_entry());
+    wq.run_all();
+  }
+
+ private:
+  WeakPartialOrdering<NodeId, NodeHash> m_wpo;
+  WPOCounter m_wpo_counter;
+  size_t m_num_thread;
+  std::unordered_set<NodeId> m_all_nodes;
+};
+
+/*
+ * A sequential version of the fixpoint algorithm for Weak Partial Ordering.
+ * Unlike the WTOMonotonicFixpointIterator, this does not rely on a recursive
+ * algorithm to order its nodes, and so is not at risk of stack overflows.
+ */
+template <typename GraphInterface,
+          typename Domain,
+          typename NodeHash = std::hash<typename GraphInterface::NodeId>>
+class MonotonicFixpointIterator
+    : public fp_impl::
+          MonotonicFixpointIteratorBase<GraphInterface, Domain, NodeHash> {
+ public:
+  using Graph = typename GraphInterface::Graph;
+  using NodeId = typename GraphInterface::NodeId;
+  using EdgeId = typename GraphInterface::EdgeId;
+  using Context =
+      fp_impl::MonotonicFixpointIteratorContext<NodeId, Domain, NodeHash>;
+
+  MonotonicFixpointIterator(const Graph& graph, size_t cfg_size_hint = 4)
+      : fp_impl::MonotonicFixpointIteratorBase<GraphInterface,
+                                               Domain,
+                                               NodeHash>(graph, cfg_size_hint),
+        m_wpo(GraphInterface::entry(graph),
+              [=, &graph](const NodeId& x) {
+                const auto& succ_edges = GraphInterface::successors(graph, x);
+                std::vector<NodeId> succ_nodes_tmp;
+                std::transform(succ_edges.begin(),
+                               succ_edges.end(),
+                               std::back_inserter(succ_nodes_tmp),
+                               std::bind(&GraphInterface::target,
+                                         std::ref(graph),
+                                         std::placeholders::_1));
+                // Filter out duplicate succ nodes.
+                std::vector<NodeId> succ_nodes;
+                std::unordered_set<NodeId> succ_nodes_set;
+                for (auto node : succ_nodes_tmp) {
+                  if (!succ_nodes_set.count(node)) {
+                    succ_nodes_set.emplace(node);
+                    succ_nodes.emplace_back(node);
+                  }
+                }
+                return succ_nodes;
+              },
+              false) {}
+
+  /*
+   * Executes the fixpoint iterator given an abstract value describing the
+   * initial program configuration. This method can be invoked multiple times
+   * with different values in order to analyze the program under different
+   * initial conditions.
+   */
+  void run(const Domain& init) {
+    this->clear();
+    Context context(init);
+    std::unordered_map<uint32_t, uint32_t> wpo_counter;
+    std::queue<uint32_t> work_queue;
+    auto entry_idx = m_wpo.get_entry();
+    assert(m_wpo.get_num_preds(entry_idx) == 0);
+    // Prepare work queue.
+    auto process_node = [&](uint32_t wpo_idx) {
+      wpo_counter[wpo_idx] = 0;
+      // NonExit node
+      if (!m_wpo.is_exit(wpo_idx)) {
+        this->analyze_vertex(&context, m_wpo.get_node(wpo_idx));
+        for (auto succ_idx : m_wpo.get_successors(wpo_idx)) {
+          // Increase succ node's counter, push succ nodes in work queue if
+          // their counter number matches their NumSchedPreds.
+          if (++wpo_counter[succ_idx] == m_wpo.get_num_preds(succ_idx)) {
+            work_queue.emplace(succ_idx);
+          }
+        }
+        return nullptr;
+      }
+      // Exit node
+      // Check if component of the exit node has stablized.
+      uint32_t head_idx = m_wpo.get_head_of_exit(wpo_idx);
+      NodeId head = m_wpo.get_node(head_idx);
+      Domain* current_state = &this->m_entry_states[head];
+      Domain new_state;
+      this->compute_entry_state(&context, head, &new_state);
+      if (new_state.leq(*current_state)) {
+        // Component stablized.
+        context.reset_local_iteration_count_for(head);
+        *current_state = std::move(new_state);
+        for (auto succ_idx : m_wpo.get_successors(wpo_idx)) {
+          // Increase succ node's counter, push succ nodes in work queue if
+          // their counter number matches their NumSchedPreds.
+          if (++wpo_counter[succ_idx] == m_wpo.get_num_preds(succ_idx)) {
+            work_queue.emplace(succ_idx);
+          }
+        }
+      } else {
+        // Component didn't stablize.
+        this->extrapolate(context, head, current_state, new_state);
+        context.increase_iteration_count_for(head);
+        // Set component nodes v's counter to their
+        // NumOuterSchedPreds(v, wpo_idx)
+        for (auto pred_pair : m_wpo.get_num_outer_preds(wpo_idx)) {
+          auto component_idx = pred_pair.first;
+          assert(component_idx != entry_idx);
+          wpo_counter[component_idx] = pred_pair.second;
+          // Push component nodes in work queue if their counter number
+          // matches their NumSchedPreds.
+          if (pred_pair.second == m_wpo.get_num_preds(component_idx)) {
+            work_queue.emplace(component_idx);
+          }
+        }
+        if (head_idx == entry_idx) {
+          // Handle special case when there is a loop on entry node.
+          // Because entry node have num_preds = 0, and for
+          // get_num_outer_preds the nodes with num_outer_preds are ignored.
+          // So we need to manually add entry node back to work queue if
+          // the component didn't stablize.
+          work_queue.emplace(head_idx);
+        }
+      }
+      return nullptr;
+    };
+    // Start from wpo entry node.
+    work_queue.emplace(entry_idx);
+    while (!work_queue.empty()) {
+      auto item = work_queue.front();
+      work_queue.pop();
+      process_node(item);
+    }
+  }
+
+ private:
+  WeakPartialOrdering<NodeId, NodeHash> m_wpo;
 };
 
 /*

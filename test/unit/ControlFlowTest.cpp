@@ -472,7 +472,8 @@ TEST_F(ControlFlowTest, remove_non_branch) {
   EXPECT_CODE_EQ(expected_code.get(), code.get());
 }
 
-void delete_if(ControlFlowGraph& cfg, std::function<bool(IROpcode)> predicate) {
+void delete_if(ControlFlowGraph& cfg,
+               const std::function<bool(IROpcode)>& predicate) {
   auto iterable = cfg::InstructionIterable(cfg);
   std::vector<cfg::InstructionIterator> to_delete;
   for (auto it = iterable.begin(); it != iterable.end(); ++it) {
@@ -2029,4 +2030,116 @@ TEST_F(ControlFlowTest, replace_if_with_return) {
     )
   )");
   EXPECT_CODE_EQ(expected.get(), code.get());
+}
+
+TEST_F(ControlFlowTest, split_block) {
+  auto code = assembler::ircode_from_string(R"(
+    (
+      (const v0 0)
+      (if-eqz v0 :true)
+
+      (const v1 1)
+      (return v1)
+
+      (:true)
+      (const v1 2)
+      (add-int v1 v1 v1)
+      (return v1)
+    )
+  )");
+  code->build_cfg(/* editable */ true);
+
+  auto& cfg = code->cfg();
+
+  EXPECT_EQ(cfg.blocks().size(), 3);
+
+  // Simple split
+  Block* s_block = cfg.blocks().back();
+  EXPECT_EQ(s_block->succs().size(), 0);
+
+  cfg.split_block(s_block->to_cfg_instruction_iterator(*s_block->begin()));
+
+  EXPECT_EQ(cfg.blocks().size(), 4);
+  EXPECT_EQ(s_block->succs().size(), 1);
+  EXPECT_EQ(s_block->preds().size(), 1);
+  EXPECT_EQ(s_block->preds()[0]->src()->begin()->insn->opcode(), OPCODE_CONST);
+
+  // Test split at the end
+  s_block = cfg.blocks().back();
+  cfg.split_block(
+      s_block->to_cfg_instruction_iterator(*std::prev(s_block->end())));
+  EXPECT_EQ(cfg.blocks().size(), 5);
+
+  EXPECT_EQ(s_block->succs().size(), 1);
+  EXPECT_EQ(s_block->begin()->insn->opcode(), OPCODE_ADD_INT);
+  EXPECT_EQ(std::prev(s_block->end())->insn->opcode(), OPCODE_RETURN);
+
+  // Test split_block() throws an instruction when splitting past the last
+  // instruction
+  EXPECT_THROW(
+      cfg.split_block(s_block->to_cfg_instruction_iterator(*s_block->end())),
+      RedexException);
+}
+
+TEST_F(ControlFlowTest, block_begins_with) {
+  auto full_code = assembler::ircode_from_string(R"(
+    (
+      (load-param v0)
+      (.dbg DBG_SET_PROLOGUE_END)
+      (const-string "one")
+      (move-result-pseudo v0)
+      (return v0)
+    )
+  )");
+
+  auto partial_code = assembler::ircode_from_string(R"(
+    (
+      (load-param v0)
+      (.dbg DBG_SET_PROLOGUE_END)
+      (const-string "one")
+      (move-result-pseudo v0)
+    )
+  )");
+
+  full_code->build_cfg(/* editable */ false);
+  partial_code->build_cfg(/* editable */ false);
+
+  auto& full_cfg = full_code->cfg();
+  auto& partial_cfg = partial_code->cfg();
+
+  EXPECT_TRUE(full_cfg.entry_block()->begins_with(partial_cfg.entry_block()));
+  EXPECT_FALSE(partial_cfg.entry_block()->begins_with(full_cfg.entry_block()));
+}
+
+TEST_F(ControlFlowTest, get_param_instructions_basic) {
+  auto code = assembler::ircode_from_string(R"(
+    (
+      (load-param v0)
+      (const-string "one")
+      (move-result-pseudo v0)
+      (return v0)
+    )
+  )");
+
+  code->build_cfg(/* editable */ true);
+  auto& cfg = code->cfg();
+
+  MethodItemEntry* param_insn = &*cfg.entry_block()->begin();
+  auto param_insns_range = cfg.get_param_instructions();
+  EXPECT_FALSE(param_insns_range.empty());
+  EXPECT_EQ(&*param_insns_range.begin(), param_insn);
+  EXPECT_EQ(&*param_insns_range.end(), &*std::next(cfg.entry_block()->begin()));
+}
+
+TEST_F(ControlFlowTest, get_param_instructions_empty) {
+  auto code = assembler::ircode_from_string(R"(
+    (
+      (.dbg DBG_SET_PROLOGUE_END)
+    )
+  )");
+
+  code->build_cfg(/* editable */ true);
+  auto& cfg = code->cfg();
+
+  EXPECT_TRUE(cfg.get_param_instructions().empty());
 }

@@ -38,7 +38,6 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/opt/final_inline \
 	-I$(top_srcdir)/opt/instrument \
 	-I$(top_srcdir)/opt/interdex \
-	-I$(top_srcdir)/opt/introduce_switch \
 	-I$(top_srcdir)/opt/local-dce \
 	-I$(top_srcdir)/opt/layout-reachability \
 	-I$(top_srcdir)/opt/merge_interface \
@@ -51,6 +50,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/opt/rebindrefs \
 	-I$(top_srcdir)/opt/redundant_move_elimination \
 	-I$(top_srcdir)/opt/regalloc \
+	-I$(top_srcdir)/opt/remove-apilevel-checks \
 	-I$(top_srcdir)/opt/remove-builders \
 	-I$(top_srcdir)/opt/remove-interfaces \
 	-I$(top_srcdir)/opt/remove_redundant_check_casts \
@@ -92,6 +92,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/service/copy-propagation \
 	-I$(top_srcdir)/service/cse \
 	-I$(top_srcdir)/service/dataflow \
+	-I$(top_srcdir)/service/dedup-blocks \
 	-I$(top_srcdir)/service/escape-analysis \
 	-I$(top_srcdir)/service/local-dce \
 	-I$(top_srcdir)/service/method-dedup \
@@ -100,6 +101,7 @@ AM_CPPFLAGS = \
 	-I$(top_srcdir)/service/reference-update \
 	-I$(top_srcdir)/service/switch-dispatch \
 	-I$(top_srcdir)/service/switch-partitioning \
+	-I$(top_srcdir)/service/type-analysis \
 	-I$(top_srcdir)/service/type-string-rewriter \
 	-I$(top_srcdir)/shared \
 	-I$(top_srcdir)/sparta/include \
@@ -151,6 +153,7 @@ libredex_la_SOURCES = \
 	libredex/DuplicateClasses.cpp \
 	libredex/EditableCfgAdapter.cpp \
 	libredex/FieldOpTracker.cpp \
+	libredex/FrameworkApi.cpp \
 	libredex/GlobalConfig.cpp \
 	libredex/GraphVisualizer.cpp \
 	libredex/HierarchyUtil.cpp \
@@ -278,7 +281,6 @@ redex_all_SOURCES = \
 	opt/interdex/DexStructure.cpp \
 	opt/interdex/InterDex.cpp \
 	opt/interdex/InterDexPass.cpp \
-	opt/introduce_switch/IntroduceSwitch.cpp \
 	opt/layout-reachability/LayoutReachabilityPass.cpp \
 	opt/local-dce/LocalDcePass.cpp \
 	opt/merge_interface/MergeInterface.cpp \
@@ -302,13 +304,13 @@ redex_all_SOURCES = \
 	opt/peephole/RedundantCheckCastRemover.cpp \
 	opt/print-members/PrintMembers.cpp \
 	opt/rebindrefs/ReBindRefs.cpp \
-	opt/rebindrefs/ReBindVRefs.cpp \
 	opt/regalloc/GraphColoring.cpp \
 	opt/regalloc/Interference.cpp \
 	opt/regalloc/RegAlloc.cpp \
 	opt/regalloc/RegisterType.cpp \
 	opt/regalloc/Split.cpp \
 	opt/regalloc/VirtualRegistersFile.cpp \
+	opt/remove-apilevel-checks/RemoveApiLevelChecks.cpp \
 	opt/remove-builders/RemoveBuilders.cpp \
 	opt/remove-builders/RemoveBuildersHelper.cpp \
 	opt/remove-interfaces/RemoveInterfacePass.cpp \
@@ -373,6 +375,7 @@ redex_all_SOURCES = \
 	service/cse/CommonSubexpressionElimination.cpp \
 	service/dataflow/LiveRange.cpp \
 	service/dataflow/ConstantUses.cpp \
+	service/dedup-blocks/DedupBlocks.cpp \
 	service/escape-analysis/LocalPointersAnalysis.cpp \
 	service/local-dce/LocalDce.cpp \
 	service/loop-info/LoopInfo.cpp \
@@ -381,6 +384,7 @@ redex_all_SOURCES = \
 	service/method-dedup/MethodDedup.cpp \
 	service/method-dedup/TypeTags.cpp \
 	service/method-inliner/CFGInliner.cpp \
+	service/method-inliner/ConstructorAnalysis.cpp \
 	service/method-inliner/Deleter.cpp \
 	service/method-inliner/Inliner.cpp \
 	service/method-inliner/MethodInliner.cpp \
@@ -391,6 +395,7 @@ redex_all_SOURCES = \
 	service/switch-dispatch/SwitchDispatch.cpp \
 	service/switch-partitioning/SwitchEquivFinder.cpp \
 	service/switch-partitioning/SwitchMethodPartitioning.cpp \
+	service/type-analysis/LocalTypeAnalyzer.cpp \
 	service/type-string-rewriter/TypeStringRewriter.cpp \
 	tools/common/ToolsCommon.cpp \
 	tools/redex-all/main.cpp

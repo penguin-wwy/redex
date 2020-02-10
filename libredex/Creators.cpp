@@ -33,27 +33,16 @@ DexProto* make_static_sig(DexMethod* meth) {
 
 } // namespace
 
-MethodBlock::MethodBlock(IRList::iterator iterator, MethodCreator* creator)
+MethodBlock::MethodBlock(const IRList::iterator& iterator,
+                         MethodCreator* creator)
     : mc(creator), curr(iterator) {
   mc->blocks.push_back(this);
 }
 
 void MethodBlock::invoke(DexMethod* meth, const std::vector<Location>& args) {
   always_assert(meth->is_concrete());
-  IROpcode opcode;
-  if (meth->is_virtual()) {
-    if (is_interface(type_class(meth->get_class()))) {
-      opcode = OPCODE_INVOKE_INTERFACE;
-    } else {
-      opcode = OPCODE_INVOKE_VIRTUAL;
-    }
-  } else {
-    if (is_static(meth)) {
-      opcode = OPCODE_INVOKE_STATIC;
-    } else {
-      opcode = OPCODE_INVOKE_DIRECT;
-    }
-  }
+  IROpcode opcode = opcode::invoke_for_method(meth);
+
   invoke(opcode, meth, args);
 }
 
@@ -505,7 +494,7 @@ MethodBlock* MethodBlock::switch_op(Location test,
   }
   auto mb = make_switch_block(sw_opcode, indices_cases);
   // Copy initialized case blocks back.
-  for (auto it : indices_cases) {
+  for (const auto& it : indices_cases) {
     SwitchIndices indices = it.first;
     always_assert(indices.size());
     int idx = *indices.begin();
@@ -543,7 +532,7 @@ void MethodBlock::push_instruction(IRInstruction* insn) {
   curr = mc->push_instruction(curr, insn);
 }
 
-IRList::iterator MethodCreator::push_instruction(IRList::iterator curr,
+IRList::iterator MethodCreator::push_instruction(const IRList::iterator& curr,
                                                  IRInstruction* insn) {
   if (curr == meth_code->end()) {
     meth_code->push_back(insn);
@@ -586,7 +575,7 @@ MethodBlock* MethodBlock::make_switch_block(
     IRInstruction* insn, std::map<SwitchIndices, MethodBlock*>& cases) {
   IRList::iterator default_it;
   std::map<SwitchIndices, IRList::iterator> mt_cases;
-  for (auto cases_it : cases) {
+  for (const auto& cases_it : cases) {
     mt_cases[cases_it.first] = curr;
   }
   curr = mc->make_switch_block(curr, insn, &default_it, mt_cases);

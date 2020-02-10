@@ -18,6 +18,7 @@ void InlinerConfig::bind_config() {
        inline_small_non_deletables);
   bind("run_const_prop", run_const_prop, run_const_prop);
   bind("run_cse", run_cse, run_cse);
+  bind("run_dedup_blocks", run_dedup_blocks, run_dedup_blocks);
   bind("run_copy_prop", run_copy_prop, run_copy_prop);
   bind("run_local_dce", run_local_dce, run_local_dce);
   bind("no_inline_annos", {}, m_no_inline_annos);
@@ -49,6 +50,10 @@ void GlobalConfig::bind_config() {
   uint32_t uint32_param;
   // Sorted alphabetically
   bind("agg_method_stats_file", "", string_param);
+  bind("android_sdk_api_21_file", "", string_param);
+  bind("android_sdk_api_23_file", "", string_param);
+  bind("android_sdk_api_25_file", "", string_param);
+  bind("android_sdk_api_26_file", "", string_param);
   bind("bytecode_sort_mode", {}, string_vector_param);
   bind("coldstart_classes", "", string_param);
   bind("compute_xml_reachability", false, bool_param);
@@ -56,15 +61,12 @@ void GlobalConfig::bind_config() {
   bind("default_coldstart_classes", "", string_param);
   bind("emit_class_method_info_map", false, bool_param);
   bind("emit_locator_strings", {}, bool_param);
-  bind("emit_name_based_locator_strings", {}, bool_param);
   bind("force_single_dex", false, bool_param);
   bind("inliner", InlinerConfig(), inliner_param);
   bind("instruction_size_bitwidth_limit", 0u, uint32_param);
   bind("ir_type_checker", IRTypeCheckerConfig(), ir_type_checker_param);
   bind("json_serde_supercls", {}, string_vector_param);
   bind("keep_all_annotation_classes", true, bool_param);
-  bind("keep_annotations", {}, string_vector_param);
-  bind("keep_class_members", {}, string_vector_param);
   bind("keep_methods", {}, string_vector_param);
   bind("keep_packages", {}, string_vector_param);
   bind("legacy_reflection_reachability", false, bool_param);

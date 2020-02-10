@@ -35,6 +35,8 @@ DexType* java_lang_Enum() { return DexType::make_type("Ljava/lang/Enum;"); }
 
 DexType* java_lang_Object() { return DexType::make_type("Ljava/lang/Object;"); }
 
+DexType* java_lang_Void() { return DexType::make_type("Ljava/lang/Void;"); }
+
 DexType* java_lang_Throwable() {
   return DexType::make_type("Ljava/lang/Throwable;");
 }
@@ -190,7 +192,7 @@ bool check_cast(const DexType* type, const DexType* base_type) {
  */
 std::string get_package_name(const DexType* type) {
   const auto& name = type->get_name()->str();
-  auto pos = name.find_last_of("/");
+  auto pos = name.find_last_of('/');
   if (pos == std::string::npos) {
     return "";
   }
@@ -206,11 +208,11 @@ bool same_package(const DexType* type1, const DexType* type2) {
 
 std::string get_simple_name(const DexType* type) {
   std::string name = std::string(type->get_name()->c_str());
-  if (name.find("/") == std::string::npos) {
+  if (name.find('/') == std::string::npos) {
     return name;
   }
-  unsigned long pos_begin = name.find_last_of("/");
-  unsigned long pos_end = name.find_last_of(";");
+  unsigned long pos_begin = name.find_last_of('/');
+  unsigned long pos_end = name.find_last_of(';');
   return name.substr(pos_begin + 1, pos_end - pos_begin - 1);
 }
 
@@ -386,6 +388,11 @@ bool is_uninstantiable_class(DexType* type) {
   if (type == nullptr || type::is_array(type) || type::is_primitive(type)) {
     return false;
   }
+
+  if (type == java_lang_Void()) {
+    return true;
+  }
+
   auto cls = type_class(type);
   if (cls == nullptr || is_interface(cls) || is_native(cls) ||
       cls->is_external() || !cls->rstate.can_delete()) {

@@ -197,6 +197,9 @@ class Block final {
       : m_id(id), m_parent(parent) {}
 
   ~Block() { m_entries.clear_and_dispose(); }
+  // This is different from the destructor. It also frees MethodItemEntry
+  // payload that is not deleted on MIE deletion.
+  void free();
 
   // copy constructor
   Block(const Block& b, MethodItemEntryCloner* cloner);
@@ -253,6 +256,10 @@ class Block final {
   bool starts_with_move_result();
 
   bool contains_opcode(IROpcode opcode);
+
+  // returns true iff the block starts with the same MethodItemEntries as the
+  // other block.
+  bool begins_with(Block* other);
 
   // If this block has a single outgoing edge and it is a goto, return its
   // target. Otherwise, return nullptr
@@ -542,6 +549,7 @@ class ControlFlowGraph {
    * moved into the new block (the successor). Return the (new) successor.
    */
   Block* split_block(const cfg::InstructionIterator& it);
+  Block* split_block(Block* block, const IRList::iterator& it);
 
   // Merge `succ` into `pred` and delete `succ`
   //
@@ -710,7 +718,7 @@ class ControlFlowGraph {
   void recompute_registers_size();
 
   // by default, start at the entry block
-  boost::sub_range<IRList> get_param_instructions();
+  boost::sub_range<IRList> get_param_instructions() const;
 
   void gather_catch_types(std::vector<DexType*>& types) const;
   void gather_strings(std::vector<DexString*>& strings) const;
@@ -808,16 +816,6 @@ class ControlFlowGraph {
   // Materialize TRY_STARTs, TRY_ENDs, and MFLOW_CATCHes
   // Used while turning back into a linear representation.
   void insert_try_catch_markers(const std::vector<Block*>& ordering);
-
-  // Follow the catch entry linked list starting at `first_mie` and
-  // make sure the throw edges (pointed to by `it`) agree with the linked list.
-  // Used while turning back into a linear representation.
-  bool catch_entries_equivalent_to_throw_edges(
-      MethodItemEntry* first_mie,
-      std::vector<Edge*>::iterator it,
-      std::vector<Edge*>::iterator end,
-      const std::unordered_map<MethodItemEntry*, Block*>&
-          catch_to_containing_block);
 
   // remove blocks with no entries
   void remove_empty_blocks();

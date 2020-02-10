@@ -18,72 +18,6 @@
 
 namespace api {
 
-/**
- * File format:
- *  <framework_cls> <super_cls> <num_methods> <num_fields>
- *      M <method0>
- *      M <method1>
- *      ...
- *      F <field0>
- *      F <field1>
- *      ...
- */
-std::unordered_map<DexType*, FrameworkAPI>
-ApiLevelsUtils::get_framework_classes() {
-  std::unordered_map<DexType*, FrameworkAPI> framework_cls_to_api;
-
-  std::ifstream infile(m_framework_api_info_filename.c_str());
-  assert_log(infile, "Failed to open framework api file: %s\n",
-             m_framework_api_info_filename.c_str());
-
-  FrameworkAPI framework_api;
-  std::string framework_cls_str;
-  std::string super_cls_str;
-  std::string class_name;
-  uint32_t num_methods;
-  uint32_t num_fields;
-  uint32_t access_flags;
-
-  while (infile >> framework_cls_str >> access_flags >> super_cls_str >>
-         num_methods >> num_fields) {
-    framework_api.cls = DexType::make_type(framework_cls_str.c_str());
-    always_assert_log(framework_cls_to_api.count(framework_api.cls) == 0,
-                      "Duplicated class name!");
-    framework_api.super_cls = DexType::make_type(super_cls_str.c_str());
-    framework_api.access_flags = DexAccessFlags(access_flags);
-
-    while (num_methods-- > 0) {
-      std::string method_str;
-      std::string tag;
-      uint32_t m_access_flags;
-
-      infile >> tag >> method_str >> m_access_flags;
-
-      always_assert(tag == "M");
-      DexMethodRef* mref = DexMethod::make_method(method_str);
-      MRefInfo mref_info(mref, DexAccessFlags(m_access_flags));
-      framework_api.mrefs_info.push_back(std::move(mref_info));
-    }
-
-    while (num_fields-- > 0) {
-      std::string field_str;
-      std::string tag;
-      uint32_t f_access_flags;
-
-      infile >> tag >> field_str >> f_access_flags;
-
-      always_assert(tag == "F");
-      DexFieldRef* fref = DexField::make_field(field_str);
-      FRefInfo fref_info(fref, DexAccessFlags(f_access_flags));
-      framework_api.frefs_info.push_back(std::move(fref_info));
-    }
-
-    framework_cls_to_api[framework_api.cls] = std::move(framework_api);
-  }
-
-  return framework_cls_to_api;
-}
-
 namespace {
 
 /**
@@ -101,7 +35,7 @@ std::string get_simple_deobfuscated_name(DexType* type) {
     full_name = type->str();
   }
 
-  size_t simple_name_pos = full_name.rfind("/");
+  size_t simple_name_pos = full_name.rfind('/');
   always_assert(simple_name_pos != std::string::npos);
   return full_name.substr(simple_name_pos + 1,
                           full_name.size() - simple_name_pos - 2);
@@ -144,28 +78,6 @@ std::unordered_map<std::string, DexType*> get_simple_cls_name_to_accepted_types(
 
 namespace {
 
-bool find_method(const std::string& simple_deobfuscated_name,
-                 const std::vector<MRefInfo>& mrefs_info,
-                 DexProto* meth_proto,
-                 DexAccessFlags access_flags) {
-  for (const MRefInfo& mref_info : mrefs_info) {
-    auto* mref = mref_info.mref;
-
-    if (mref->get_name()->str() == simple_deobfuscated_name &&
-        mref->get_proto() == meth_proto) {
-
-      // We also need to check the access flags.
-      // NOTE: We accept cases where the methods are not declared final.
-      if (access_flags == mref_info.access_flags ||
-          (access_flags & ~ACC_FINAL) == mref_info.access_flags) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
 /**
  * When checking if a method of a release class exists in the framework
  * equivalent, checking directly the replaced version (as in replacing all
@@ -182,8 +94,7 @@ bool check_methods(
 
   DexType* current_type = methods.at(0)->get_class();
   for (DexMethod* meth : methods) {
-    if (!is_public(meth) || methods_non_private.count(meth) == 0) {
-      // TODO(emmasevastian): When should we check non-public methods?
+    if (methods_non_private.count(meth) == 0) {
       continue;
     }
 
@@ -191,8 +102,8 @@ bool check_methods(
         type_reference::get_new_proto(meth->get_proto(), release_to_framework);
     // NOTE: For now, this assumes no obfuscation happened. We need to update
     //       it, if it runs later.
-    if (!find_method(meth->get_simple_deobfuscated_name(),
-                     framework_api.mrefs_info, new_proto, meth->get_access())) {
+    if (!framework_api.has_method(meth->get_simple_deobfuscated_name(),
+                                  new_proto, meth->get_access())) {
       TRACE(API_UTILS, 4,
             "Excluding %s since we couldn't find corresponding method: %s!",
             SHOW(framework_api.cls), show_deobfuscated(meth).c_str());
@@ -235,8 +146,7 @@ bool check_fields(
 
   DexType* current_type = fields.at(0)->get_class();
   for (DexField* field : fields) {
-    if (!is_public(field) || fields_non_private.count(field) == 0) {
-      // TODO(emmasevastian): When should we check non-public fields?
+    if (fields_non_private.count(field) == 0) {
       continue;
     }
 

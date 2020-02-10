@@ -33,8 +33,8 @@ from pyredex.utils import (
     abs_glob,
     make_temp_dir,
     remove_comments,
-    remove_temp_dirs,
     sign_apk,
+    with_temp_cleanup,
 )
 
 
@@ -123,15 +123,6 @@ def write_debugger_command(dbg, src_root, args):
 
 
 def add_extra_environment_args(env):
-    # If we're running with ASAN, we'll want these flags, if we're not, they do
-    # nothing
-    if "ASAN_OPTIONS" not in env:  # don't overwrite user specified options
-        # We ignore leaks because they are high volume and low danger (for a
-        # short running program like redex).
-        # We don't detect container overflow because it finds bugs in our
-        # libraries (namely jsoncpp and boost).
-        env["ASAN_OPTIONS"] = "detect_leaks=0:detect_container_overflow=0"
-
     # If we haven't set MALLOC_CONF but we have requested to profile the memory
     # of a specific pass, set some reasonable defaults
     if "MALLOC_PROFILE_PASS" in env and "MALLOC_CONF" not in env:
@@ -793,6 +784,13 @@ Given an APK, produce a better APK!
         nargs="?",
         help="Root directory that all references to source files in debug information is given relative to.",
     )
+
+    parser.add_argument(
+        "--always-clean-up",
+        action="store_true",
+        help="Clean up temporaries even under failure",
+    )
+
     return parser
 
 
@@ -996,7 +994,7 @@ def prepare_redex(args):
     # Move each dex to a separate temporary directory to be operated by
     # redex.
     dexen = move_dexen_to_directories(dex_dir, dex_glob(dex_dir))
-    for store in store_files:
+    for store in sorted(store_files):
         dexen.append(store)
     log("Unpacking APK finished in {:.2f} seconds".format(timer() - unpack_start_time))
 
@@ -1060,15 +1058,12 @@ def finalize_redex(state):
 
     log("Repacking dex files")
     have_locators = state.config_dict.get("emit_locator_strings")
-    have_name_based_locators = state.config_dict.get("emit_name_based_locator_strings")
     log("Emit Locator Strings: %s" % have_locators)
-    log("Emit Name Based Locator Strings: %s" % have_name_based_locators)
 
     state.dex_mode.repackage(
         get_dex_file_path(state.args, state.extracted_apk_dir),
         state.dex_dir,
         have_locators,
-        have_name_based_locators,
         fast_repackage=state.args.dev,
     )
 
@@ -1084,7 +1079,6 @@ def finalize_redex(state):
             state.extracted_apk_dir,
             state.dex_dir,
             have_locators,
-            have_name_based_locators,
             locator_store_id,
             fast_repackage=state.args.dev,
         )
@@ -1128,7 +1122,6 @@ def run_redex(args):
         sys.exit()
 
     finalize_redex(state)
-    remove_temp_dirs()
 
 
 if __name__ == "__main__":
@@ -1143,4 +1136,4 @@ if __name__ == "__main__":
         pass
     args = arg_parser(**keys).parse_args()
     validate_args(args)
-    run_redex(args)
+    with_temp_cleanup(lambda: run_redex(args), args.always_clean_up)

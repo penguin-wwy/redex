@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <regex>
 #include <set>
 #include <streambuf>
 #include <string>
@@ -53,6 +54,7 @@
 #include "ReachableClasses.h"
 #include "RedexContext.h"
 #include "RedexResources.h"
+#include "Show.h"
 #include "Timer.h"
 #include "ToolsCommon.h"
 #include "Walkers.h"
@@ -646,7 +648,7 @@ Json::Value get_detailed_stats(const std::vector<dex_stats_t>& dexes_stats) {
 
 Json::Value get_times() {
   Json::Value list(Json::arrayValue);
-  for (auto t : Timer::get_times()) {
+  for (const auto& t : Timer::get_times()) {
     Json::Value element;
     element[t.first] = std::round(t.second * 10) / 10.0;
     list.append(element);
@@ -885,8 +887,7 @@ void redex_frontend(ConfigFiles& conf, /* input */
   {
     Timer t("Initializing reachable classes");
     // init reachable will change rstate of classes, methods and fields
-    init_reachable_classes(scope, json_config,
-                           conf.get_no_optimizations_annos());
+    init_reachable_classes(scope, json_config);
   }
 }
 
@@ -914,15 +915,10 @@ void redex_backend(const std::string& output_dir,
   const JsonWrapper& json_config = conf.get_json_config();
 
   LocatorIndex* locator_index = nullptr;
-  bool emit_name_based_locators = false;
   if (json_config.get("emit_locator_strings", false)) {
-    emit_name_based_locators =
-        json_config.get("emit_name_based_locator_strings", false);
     TRACE(LOC, 1,
-          "Will emit%s class-locator strings for classloader optimization",
-          emit_name_based_locators ? " name-based" : "");
-    locator_index =
-        new LocatorIndex(make_locator_index(stores, emit_name_based_locators));
+          "Will emit class-locator strings for classloader optimization");
+    locator_index = new LocatorIndex(make_locator_index(stores));
   }
 
   dex_stats_t output_totals;
@@ -973,7 +969,6 @@ void redex_backend(const std::string& output_dir,
                                ss.str(),
                                &store.get_dexen()[i],
                                locator_index,
-                               emit_name_based_locators,
                                store_number,
                                i,
                                conf,
@@ -1030,7 +1025,7 @@ void redex_backend(const std::string& output_dir,
   }
 }
 
-void dump_class_method_info_map(const std::string file_path,
+void dump_class_method_info_map(const std::string& file_path,
                                 DexStoresVector& stores) {
   std::ofstream ofs(file_path, std::ofstream::out | std::ofstream::trunc);
 
@@ -1105,7 +1100,7 @@ const char* kAsanDefaultOptions =
     ":"
     "detect_invalid_pointer_pairs=1"
     ":"
-    "detect_leaks=1"
+    "detect_leaks=0"
     ":"
     "detect_stack_use_after_return=1"
     ":"
@@ -1203,11 +1198,19 @@ int main(int argc, char* argv[]) {
   }
   // now that all the timers are done running, we can collect the data
   stats["output_stats"]["time_stats"] = get_times();
+  auto vm_stats = get_mem_stats();
+  stats["output_stats"]["mem_stats"]["vm_peak"] =
+      (Json::UInt64)vm_stats.vm_peak;
+  stats["output_stats"]["mem_stats"]["vm_hwm"] = (Json::UInt64)vm_stats.vm_peak;
   {
     std::ofstream out(stats_output_path);
     out << stats;
   }
 
   TRACE(MAIN, 1, "Done.");
+  TRACE(MAIN, 1, "Memory stats: VmPeak=%s VmHWM=%s",
+        pretty_bytes(vm_stats.vm_peak).c_str(),
+        pretty_bytes(vm_stats.vm_hwm).c_str());
+
   return 0;
 }

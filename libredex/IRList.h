@@ -31,12 +31,16 @@ struct TryEntry {
       : type(type), catch_start(catch_start) {
     always_assert(catch_start != nullptr);
   }
+
+  bool operator==(const TryEntry& other) const;
 };
 
 struct CatchEntry {
   DexType* catch_type;
   MethodItemEntry* next; // always null for catchall
   CatchEntry(DexType* catch_type) : catch_type(catch_type), next(nullptr) {}
+
+  bool operator==(const CatchEntry& other) const;
 };
 
 /**
@@ -64,17 +68,19 @@ enum BranchTargetType {
 };
 
 struct BranchTarget {
-  BranchTargetType type;
   MethodItemEntry* src;
+  BranchTargetType type;
 
   // The key that a value must match to take this case in a switch statement.
   int32_t case_key;
 
   BranchTarget() = default;
-  BranchTarget(MethodItemEntry* src) : type(BRANCH_SIMPLE), src(src) {}
+  BranchTarget(MethodItemEntry* src) : src(src), type(BRANCH_SIMPLE) {}
 
   BranchTarget(MethodItemEntry* src, int32_t case_key)
-      : type(BRANCH_MULTI), src(src), case_key(case_key) {}
+      : src(src), type(BRANCH_MULTI), case_key(case_key) {}
+
+  bool operator==(const BranchTarget& other) const;
 };
 
 /*
@@ -147,6 +153,12 @@ struct MethodItemEntry {
   MethodItemEntry(std::unique_ptr<DexPosition> pos)
       : type(MFLOW_POSITION), pos(std::move(pos)) {}
 
+  bool operator==(const MethodItemEntry&) const;
+
+  bool operator!=(const MethodItemEntry& that) const {
+    return !(*this == that);
+  }
+
   MethodItemEntry() : type(MFLOW_FALLTHROUGH) {}
   ~MethodItemEntry();
 
@@ -217,15 +229,15 @@ class IRList {
   using difference_type = IntrusiveList::difference_type;
 
   IRList::iterator main_block();
-  IRList::iterator make_if_block(IRList::iterator cur,
+  IRList::iterator make_if_block(const IRList::iterator& cur,
                                  IRInstruction* insn,
                                  IRList::iterator* if_block);
-  IRList::iterator make_if_else_block(IRList::iterator cur,
+  IRList::iterator make_if_else_block(const IRList::iterator& cur,
                                       IRInstruction* insn,
                                       IRList::iterator* if_block,
                                       IRList::iterator* else_block);
   IRList::iterator make_switch_block(
-      IRList::iterator cur,
+      const IRList::iterator& cur,
       IRInstruction* insn,
       IRList::iterator* default_block,
       std::map<SwitchIndices, IRList::iterator>& cases);
@@ -238,7 +250,7 @@ class IRList {
 
   /* Passes memory ownership of "from" to callee.  It will delete it. */
   void replace_opcode(IRInstruction* to_delete,
-                      std::vector<IRInstruction*> replacements);
+                      const std::vector<IRInstruction*>& replacements);
 
   /*
    * Does exactly what it says and you SHOULD be afraid. This is mainly useful

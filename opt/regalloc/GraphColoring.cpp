@@ -265,7 +265,7 @@ std::string show(const SpillPlan& spill_plan) {
     ss << reg << "\n";
   }
   ss << "Range spills:\n";
-  for (auto pair : spill_plan.range_spills) {
+  for (const auto& pair : spill_plan.range_spills) {
     auto* insn = pair.first;
     ss << show(insn) << ": ";
     for (auto idx : pair.second) {
@@ -279,7 +279,7 @@ std::string show(const SpillPlan& spill_plan) {
 std::string show(const SplitPlan& split_plan) {
   std::ostringstream ss;
   ss << "split_around:\n";
-  for (auto pair : split_plan.split_around) {
+  for (const auto& pair : split_plan.split_around) {
     ss << pair.first << ": ";
     for (auto reg : pair.second) {
       ss << reg << " ";
@@ -639,7 +639,7 @@ void Allocator::select_ranges(const IRCode* code,
     }
 
     vreg_t range_base =
-        find_best_range_fit(ig, insn->srcs(), 0, reg_transform->size,
+        find_best_range_fit(ig, insn->srcs_vec(), 0, reg_transform->size,
                             vreg_files, reg_transform->map);
     fit_range_instruction(ig, insn, range_base, vreg_files, reg_transform,
                           spill_plan);
@@ -745,7 +745,7 @@ void Allocator::find_split(const interference::Graph& ig,
     }
     auto max_reg_bound = ig.get_node(reg).max_vreg();
     // For each vreg(color).
-    for (auto vreg_assigned : mapped_neighbors) {
+    for (const auto& vreg_assigned : mapped_neighbors) {
       // We only want to check neighbors that has vreg assigned that
       // can be used by the reg.
       if (vreg_assigned.first > max_reg_bound) {
@@ -915,7 +915,7 @@ void Allocator::split_params(const interference::Graph& ig,
     }
   }
   // Insert the loads
-  for (auto param_pair : load_locations) {
+  for (const auto& param_pair : load_locations) {
     auto dest = param_pair.first;
     auto first_use_it = param_pair.second;
     code->insert_before(
@@ -1131,6 +1131,7 @@ void Allocator::allocate(DexMethod* method) {
 
     TRACE(REG, 5, "Transform before range alloc:\n%s", SHOW(reg_transform));
     choose_range_promotions(code, ig, spill_plan, &range_set);
+    range_set.prioritize();
     select_ranges(code, ig, range_set, &reg_transform, &spill_plan);
     // Select registers for symregs that can be addressed using all 16 bits.
     // These symregs are typically generated during the spilling and splitting

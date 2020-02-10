@@ -7,11 +7,14 @@
 
 #include "Inliner.h"
 
+#include <utility>
+
 #include "ApiLevelChecker.h"
 #include "CFGInliner.h"
 #include "ConcurrentContainers.h"
 #include "ConstantPropagationAnalysis.h"
 #include "ConstantPropagationWholeProgramState.h"
+#include "ConstructorAnalysis.h"
 #include "ControlFlow.h"
 #include "DexUtil.h"
 #include "EditableCfgAdapter.h"
@@ -88,8 +91,9 @@ MultiMethodInliner::MultiMethodInliner(
     const std::unordered_map<const DexMethodRef*, method_profiles::Stats>&
         method_profile_stats,
     const std::unordered_map<const DexMethod*, size_t>&
-        same_method_implementations)
-    : resolver(resolve_fn),
+        same_method_implementations,
+    bool analyze_and_prune_inits)
+    : resolver(std::move(resolve_fn)),
       xstores(stores),
       m_scope(scope),
       m_config(config),
@@ -97,7 +101,8 @@ MultiMethodInliner::MultiMethodInliner(
       m_hot_methods(
           inline_for_speed::compute_hot_methods(method_profile_stats)),
       m_same_method_implementations(same_method_implementations),
-      m_pure_methods(get_pure_methods()) {
+      m_pure_methods(get_pure_methods()),
+      m_analyze_and_prune_inits(analyze_and_prune_inits) {
   for (const auto& callee_callers : true_virtual_callers) {
     for (const auto& caller_insns : callee_callers.second) {
       for (auto insn : caller_insns.second) {
@@ -175,7 +180,8 @@ MultiMethodInliner::MultiMethodInliner(
   }
 
   m_shrinking_enabled = m_config.run_const_prop || m_config.run_cse ||
-                        m_config.run_copy_prop || m_config.run_local_dce;
+                        m_config.run_copy_prop || m_config.run_local_dce ||
+                        m_config.run_dedup_blocks;
 
   if (config.run_cse) {
     m_cse_shared_state =
@@ -187,7 +193,7 @@ MultiMethodInliner::MultiMethodInliner(
  * The key of a constant-arguments data structure is a string representation
  * that approximates the constant arguments.
  */
-static std::string get_key(ConstantArguments constant_arguments) {
+static std::string get_key(const ConstantArguments& constant_arguments) {
   always_assert(!constant_arguments.is_bottom());
   if (constant_arguments.is_top()) {
     return "";
@@ -284,7 +290,7 @@ void MultiMethodInliner::inline_methods() {
   std::unordered_map<DexMethod*, size_t> visited;
   CallerNonrecursiveCalleesByStackDepth
       caller_nonrecursive_callees_by_stack_depth;
-  for (auto it : caller_callee) {
+  for (const auto& it : caller_callee) {
     auto caller = it.first;
     TraceContext context(caller->get_deobfuscated_name());
     // if the caller is not a top level keep going, it will be traversed
@@ -470,7 +476,7 @@ MultiMethodInliner::get_invoke_constant_arguments(
         auto callee = resolver(insn->get_method(), opcode_to_search(insn));
         if (callees_set.count(callee)) {
           ConstantArguments constant_arguments;
-          auto& srcs = insn->srcs();
+          const auto& srcs = insn->srcs();
           for (size_t i = 0; i < srcs.size(); ++i) {
             auto val = env.get(srcs[i]);
             always_assert(!val.is_bottom());
@@ -495,7 +501,7 @@ void MultiMethodInliner::inline_callees(
   // Build a callee to opcode map
   std::vector<std::pair<DexMethod*, IRList::iterator>> inlinables;
   editable_cfg_adapter::iterate_with_iterator(
-      caller->get_code(), [&](IRList::iterator it) {
+      caller->get_code(), [&](const IRList::iterator& it) {
         auto insn = it->insn;
         if (!is_invoke(insn->opcode())) {
           return editable_cfg_adapter::LOOP_CONTINUE;
@@ -514,6 +520,20 @@ void MultiMethodInliner::inline_callees(
           return editable_cfg_adapter::LOOP_CONTINUE;
         }
         always_assert(callee->is_concrete());
+        if (m_analyze_and_prune_inits && method::is_init(callee)) {
+          if (!callee->get_code()->editable_cfg_built()) {
+            return editable_cfg_adapter::LOOP_CONTINUE;
+          }
+          if (!can_inline_init(callee)) {
+            if (!method::is_init(caller) ||
+                caller->get_class() != callee->get_class() ||
+                !caller->get_code()->editable_cfg_built() ||
+                !constructor_analysis::can_inline_inits_in_same_class(
+                    caller, callee, insn)) {
+              return editable_cfg_adapter::LOOP_CONTINUE;
+            }
+          }
+        }
         found++;
         inlinables.emplace_back(callee, it);
         if (found == callees.size()) {
@@ -535,7 +555,7 @@ void MultiMethodInliner::inline_callees(
     DexMethod* caller, const std::unordered_set<IRInstruction*>& insns) {
   std::vector<std::pair<DexMethod*, IRList::iterator>> inlinables;
   editable_cfg_adapter::iterate_with_iterator(
-      caller->get_code(), [&](IRList::iterator it) {
+      caller->get_code(), [&](const IRList::iterator& it) {
         auto insn = it->insn;
         if (insns.count(insn)) {
           auto callee = resolver(insn->get_method(), opcode_to_search(insn));
@@ -597,7 +617,7 @@ void MultiMethodInliner::inline_inlinables(
                    });
 
   std::vector<DexMethod*> inlined_callees;
-  for (auto inlinable : ordered_inlinables) {
+  for (const auto& inlinable : ordered_inlinables) {
     auto callee_method = inlinable.first;
     auto callee = callee_method->get_code();
     auto callsite = inlinable.second;
@@ -656,7 +676,7 @@ void MultiMethodInliner::inline_inlinables(
 }
 
 void MultiMethodInliner::async_prioritized_method_execute(
-    DexMethod* method, std::function<void()> f) {
+    DexMethod* method, const std::function<void()>& f) {
   int priority = std::numeric_limits<int>::min();
   auto it = m_async_callee_priorities.find(method);
   if (it != m_async_callee_priorities.end()) {
@@ -683,6 +703,7 @@ void MultiMethodInliner::shrink_method(DexMethod* method) {
   cse_impl::Stats cse_stats;
   copy_propagation_impl::Stats copy_prop_stats;
   LocalDce::Stats local_dce_stats;
+  dedup_blocks_impl::Stats dedup_blocks_stats;
 
   if (m_config.run_const_prop) {
     if (editable_cfg_built) {
@@ -737,6 +758,17 @@ void MultiMethodInliner::shrink_method(DexMethod* method) {
     local_dce_stats = local_dce.get_stats();
   }
 
+  if (m_config.run_dedup_blocks) {
+    if (!code->editable_cfg_built()) {
+      code->build_cfg(/* editable */ true);
+    }
+
+    dedup_blocks_impl::Config config;
+    dedup_blocks_impl::DedupBlocks dedup_blocks(config, method);
+    dedup_blocks.run();
+    dedup_blocks_stats = dedup_blocks.get_stats();
+  }
+
   if (editable_cfg_built && !code->editable_cfg_built()) {
     code->build_cfg(/* editable */ true);
   } else if (!editable_cfg_built && code->editable_cfg_built()) {
@@ -748,6 +780,7 @@ void MultiMethodInliner::shrink_method(DexMethod* method) {
   m_cse_stats += cse_stats;
   m_copy_prop_stats += copy_prop_stats;
   m_local_dce_stats += local_dce_stats;
+  m_dedup_blocks_stats += dedup_blocks_stats;
   m_methods_shrunk++;
 }
 
@@ -1104,7 +1137,7 @@ static size_t get_inlined_cost(IRInstruction* insn) {
  * metadata) that exists for this block; this doesn't include the cost of
  * the instructions in the block, which are accounted for elsewhere.
  */
-static size_t get_inlined_cost(const std::vector<cfg::Block*> blocks,
+static size_t get_inlined_cost(const std::vector<cfg::Block*>& blocks,
                                size_t index) {
   auto block = blocks.at(index);
   switch (block->branchingness()) {
@@ -1219,7 +1252,7 @@ size_t MultiMethodInliner::get_inlined_cost(const DexMethod* callee) {
       inlined_cost <= MAX_COST_FOR_CONSTANT_PROPAGATION) {
     const auto& callee_constant_arguments =
         callee_constant_arguments_it->second;
-    auto process_key = [&](ConstantArgumentsOccurrences cao) {
+    auto process_key = [&](const ConstantArgumentsOccurrences& cao) {
       const auto& constant_arguments = cao.first;
       const auto count = cao.second;
       TRACE(INLINE, 5, "[too_many_callers] get_inlined_cost %s", SHOW(callee));
@@ -1291,6 +1324,26 @@ size_t MultiMethodInliner::get_same_method_implementations(
   return 1;
 }
 
+bool MultiMethodInliner::can_inline_init(const DexMethod* init_method) {
+  auto opt_can_inline_init = m_can_inline_init.get(init_method, boost::none);
+  if (opt_can_inline_init) {
+    return *opt_can_inline_init;
+  }
+
+  bool res = constructor_analysis::can_inline_init(init_method);
+  m_can_inline_init.update(
+      init_method,
+      [&](const DexMethod*, boost::optional<bool>& value, bool exists) {
+        if (exists) {
+          // We wasted some work, and some other thread beat us. Oh well...
+          always_assert(*value == res);
+          return;
+        }
+        value = res;
+      });
+  return res;
+}
+
 bool MultiMethodInliner::too_many_callers(const DexMethod* callee) {
   const auto& callers = callee_caller.at(callee);
   auto caller_count = callers.size();
@@ -1351,6 +1404,29 @@ bool MultiMethodInliner::too_many_callers(const DexMethod* callee) {
   // Let's just consider this particular inlining opportunity
   if (inlined_cost <= invoke_cost) {
     return false;
+  }
+
+  // Can we inline the init-callee into all callers?
+  // If not, then we can give up, as there's no point in making the case that
+  // we can eliminate the callee method based on pervasive inlining.
+  if (m_analyze_and_prune_inits && method::is_init(callee)) {
+    if (!callee->get_code()->editable_cfg_built()) {
+      return true;
+    }
+    if (!can_inline_init(callee)) {
+      std::unordered_set<DexMethod*> callers_set(callers.begin(),
+                                                 callers.end());
+      for (auto caller : callers_set) {
+        if (!method::is_init(caller) ||
+            caller->get_class() != callee->get_class() ||
+            !caller->get_code()->editable_cfg_built() ||
+            !constructor_analysis::can_inline_inits_in_same_class(
+                caller, callee,
+                /* callsite_insn */ nullptr)) {
+          return true;
+        }
+      }
+    }
   }
 
   if (m_config.multiple_callers) {
@@ -1729,7 +1805,7 @@ using RegMap = transform::RegMap;
  */
 std::unique_ptr<RegMap> gen_callee_reg_map(IRCode* caller_code,
                                            const IRCode* callee_code,
-                                           IRList::iterator invoke_it) {
+                                           const IRList::iterator& invoke_it) {
   auto callee_reg_start = caller_code->get_registers_size();
   auto insn = invoke_it->insn;
   auto reg_map = std::make_unique<RegMap>();
@@ -1776,7 +1852,7 @@ IRInstruction* move_result(IRInstruction* res, IRInstruction* move_res) {
  */
 void remap_callee_for_tail_call(const IRCode* caller_code,
                                 IRCode* callee_code,
-                                IRList::iterator invoke_it) {
+                                const IRList::iterator& invoke_it) {
   RegMap reg_map;
   auto insn = invoke_it->insn;
   auto callee_reg_start = caller_code->get_registers_size();
@@ -1859,9 +1935,9 @@ class MethodSplicer {
     return result;
   }
 
-  void operator()(IRList::iterator insert_pos,
-                  IRList::iterator fcallee_start,
-                  IRList::iterator fcallee_end) {
+  void operator()(const IRList::iterator& insert_pos,
+                  const IRList::iterator& fcallee_start,
+                  const IRList::iterator& fcallee_end) {
     std::vector<DexPosition*> positions_to_fix;
     for (auto it = fcallee_start; it != fcallee_end; ++it) {
       if (should_skip_debug(&*it)) {
@@ -1965,14 +2041,14 @@ DexPosition* last_position_before(const IRList::const_iterator& it,
 
 void inline_method(DexMethod* caller,
                    IRCode* callee_code,
-                   IRList::iterator pos) {
+                   const IRList::iterator& pos) {
   change_visibility(callee_code, caller->get_class());
   inline_method_unsafe(caller->get_code(), callee_code, pos);
 }
 
 void inline_method_unsafe(IRCode* caller_code,
                           IRCode* callee_code,
-                          IRList::iterator pos) {
+                          const IRList::iterator& pos) {
   TRACE(INL, 5, "caller code:\n%s", SHOW(caller_code));
   TRACE(INL, 5, "callee code:\n%s", SHOW(callee_code));
 

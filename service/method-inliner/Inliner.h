@@ -17,6 +17,7 @@
 #include "ConstantEnvironment.h"
 #include "ConstantPropagationTransform.h"
 #include "CopyPropagation.h"
+#include "DedupBlocks.h"
 #include "DexClass.h"
 #include "DexStore.h"
 #include "IPConstantPropagationAnalysis.h"
@@ -52,13 +53,17 @@ void inline_tail_call(DexMethod* caller,
  * Inline `callee` into `caller` at `pos` but not check if the caller method has
  * the permit to call the inlined code.
  */
-void inline_method_unsafe(IRCode* caller, IRCode* callee, IRList::iterator pos);
+void inline_method_unsafe(IRCode* caller,
+                          IRCode* callee,
+                          const IRList::iterator& pos);
 
 /**
  * Inline `callee` into `caller` at `pos` and try to change the visibility of
  * accessed members. See comment of `change_visibility` for details.
  */
-void inline_method(DexMethod* caller, IRCode* callee, IRList::iterator pos);
+void inline_method(DexMethod* caller,
+                   IRCode* callee,
+                   const IRList::iterator& pos);
 
 /*
  * Use the editable CFG instead of IRCode to do the inlining. Return true on
@@ -122,7 +127,8 @@ class MultiMethodInliner {
       const std::unordered_map<const DexMethodRef*, method_profiles::Stats>&
           method_profile_stats = {},
       const std::unordered_map<const DexMethod*, size_t>&
-          same_method_implementations = {});
+          same_method_implementations = {},
+      bool analyze_and_prune_inits = false);
 
   ~MultiMethodInliner() { delayed_invoke_direct_to_static(); }
 
@@ -219,6 +225,9 @@ class MultiMethodInliner {
                              const IRInstruction* invk_insn,
                              std::vector<DexMethod*>* make_static);
 
+  bool noninlinable_same_class_init_invoke(IRInstruction* insn,
+                                           const DexMethod* callee,
+                                           const DexMethod* caller);
   /**
    * Return true if inlining would require a method called from the callee
    * (candidate) to turn into a virtual method (e.g. private to public).
@@ -358,8 +367,8 @@ class MultiMethodInliner {
   void postprocess_method(DexMethod* method);
 
   /**
-   * Shrink a method (run constant-prop, cse, copy-prop, local-dce)
-   * synchronously.
+   * Shrink a method (run constant-prop, cse, copy-prop, local-dce,
+   * dedup-blocks) synchronously.
    */
   void shrink_method(DexMethod* method);
 
@@ -386,9 +395,17 @@ class MultiMethodInliner {
    * Execute asynchronously using a method's priority.
    */
   void async_prioritized_method_execute(DexMethod* method,
-                                        std::function<void()> f);
+                                        const std::function<void()>& f);
 
   size_t get_same_method_implementations(const DexMethod* callee);
+
+  // Checks that...
+  // - there are no assignments to (non-inherited) instance fields before
+  //   a constructor call, and
+  // - the constructor refers to a method of the same class, and
+  // - there are no assignments to any final fields.
+  // Under these conditions, a constructor is universally inlinable.
+  bool can_inline_init(const DexMethod* init_method);
 
  private:
   /**
@@ -484,10 +501,15 @@ class MultiMethodInliner {
   // Optional cache for get_callee_insn_size function
   std::unique_ptr<ConcurrentMap<const DexMethod*, size_t>> m_callee_insn_sizes;
 
+  // Cache of whether a constructor can be unconditionally inlined.
+  mutable ConcurrentMap<const DexMethod*, boost::optional<bool>>
+      m_can_inline_init;
+
   constant_propagation::Transform::Stats m_const_prop_stats;
   cse_impl::Stats m_cse_stats;
   copy_propagation_impl::Stats m_copy_prop_stats;
   LocalDce::Stats m_local_dce_stats;
+  dedup_blocks_impl::Stats m_dedup_blocks_stats;
   size_t m_methods_shrunk{0};
 
   // When mutating service stats while inlining in parallel
@@ -543,6 +565,10 @@ class MultiMethodInliner {
 
   const std::unordered_set<DexMethodRef*> m_pure_methods;
 
+  // Whether to do some deep analysis to determine if constructor candidates
+  // can be safely inlined, and don't inline them otherwise.
+  bool m_analyze_and_prune_inits;
+
   std::unique_ptr<cse_impl::SharedState> m_cse_shared_state;
 
  public:
@@ -556,6 +582,9 @@ class MultiMethodInliner {
     return m_copy_prop_stats;
   }
   const LocalDce::Stats& get_local_dce_stats() { return m_local_dce_stats; }
+  const dedup_blocks_impl::Stats& get_dedup_blocks_stats() {
+    return m_dedup_blocks_stats;
+  }
   size_t get_methods_shrunk() { return m_methods_shrunk; }
   size_t get_callers() { return m_async_caller_wait_counts.size(); }
   size_t get_delayed_shrinking_callees() {

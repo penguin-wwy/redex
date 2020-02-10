@@ -271,7 +271,7 @@ std::vector<cfg::Edge*> SwitchEquivFinder::find_leaves() {
 }
 
 bool SwitchEquivFinder::move_edges(
-    const std::vector<std::pair<cfg::Edge*, cfg::Block*>> edges_to_move) {
+    const std::vector<std::pair<cfg::Edge*, cfg::Block*>>& edges_to_move) {
   for (const auto& pair : edges_to_move) {
     cfg::Edge* edge = pair.first;
     cfg::Block* orig = edge->target();
@@ -307,6 +307,7 @@ bool SwitchEquivFinder::move_edges(
       continue;
     }
     // copy on purpose so we can alter in the loop
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     const auto orig_succs = orig->succs();
     for (cfg::Edge* orig_succ : orig_succs) {
       cfg::Edge* copy_succ = new cfg::Edge(*orig_succ);
@@ -322,7 +323,7 @@ bool SwitchEquivFinder::move_edges(
 // * Remove loads that are never used outside the if-else chain blocks
 // * Remove empty lists of loads from the map (possibly emptying the map)
 void SwitchEquivFinder::normalize_extra_loads(
-    std::unordered_set<cfg::Block*> non_leaves) {
+    const std::unordered_set<cfg::Block*>& non_leaves) {
 
   // collect the extra loads
   std::unordered_set<IRInstruction*> extra_loads;

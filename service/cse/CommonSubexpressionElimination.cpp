@@ -57,6 +57,8 @@
 
 #include "CommonSubexpressionElimination.h"
 
+#include <utility>
+
 #include "BaseIRAnalyzer.h"
 #include "ConstantAbstractDomain.h"
 #include "ControlFlow.h"
@@ -155,7 +157,8 @@ bool operator==(const IRValue& a, const IRValue& b) {
   return a.opcode == b.opcode && a.srcs == b.srcs && a.literal == b.literal;
 }
 
-using IRInstructionDomain = sparta::ConstantAbstractDomain<IRInstruction*>;
+using IRInstructionDomain =
+    sparta::ConstantAbstractDomain<const IRInstruction*>;
 using ValueIdDomain = sparta::ConstantAbstractDomain<value_id_t>;
 using DefEnvironment =
     sparta::PatriciaTreeMapAbstractEnvironment<value_id_t, IRInstructionDomain>;
@@ -183,12 +186,12 @@ class CseEnvironment final
   }
 
   CseEnvironment& mutate_def_env(std::function<void(DefEnvironment*)> f) {
-    apply<0>(f);
+    apply<0>(std::move(f));
     return *this;
   }
 
   CseEnvironment& mutate_ref_env(std::function<void(RefEnvironment*)> f) {
-    apply<1>(f);
+    apply<1>(std::move(f));
     return *this;
   }
 };
@@ -364,7 +367,7 @@ class Analyzer final : public BaseIRAnalyzer<CseEnvironment> {
     MonotonicFixpointIterator::run(CseEnvironment::top());
   }
 
-  void analyze_instruction(IRInstruction* insn,
+  void analyze_instruction(const IRInstruction* insn,
                            CseEnvironment* current_state) const override {
     const auto set_current_state_at = [&](reg_t reg, bool wide,
                                           ValueIdDomain value) {
@@ -469,7 +472,7 @@ class Analyzer final : public BaseIRAnalyzer<CseEnvironment> {
     }
   }
 
-  void install_forwarding(IRInstruction* insn,
+  void install_forwarding(const IRInstruction* insn,
                           const IRValue& value,
                           CseEnvironment* current_state) const {
     auto value_id = *get_value_id(value);
@@ -561,8 +564,8 @@ class Analyzer final : public BaseIRAnalyzer<CseEnvironment> {
   }
 
   boost::optional<IRValue> get_equivalent_put_value(
-      IRInstruction* insn, CseEnvironment* current_state) const {
-    auto ref_env = current_state->get_ref_env();
+      const IRInstruction* insn, CseEnvironment* current_state) const {
+    const auto& ref_env = current_state->get_ref_env();
     if (is_sput(insn->opcode())) {
       always_assert(insn->srcs_size() == 1);
       IRValue value;
@@ -632,7 +635,7 @@ class Analyzer final : public BaseIRAnalyzer<CseEnvironment> {
     auto opcode = insn->opcode();
     always_assert(opcode != IOPCODE_PRE_STATE_SRC);
     value.opcode = opcode;
-    auto ref_env = current_state->get_ref_env();
+    const auto& ref_env = current_state->get_ref_env();
     for (auto reg : insn->srcs()) {
       auto c = ref_env.get(reg).get_constant();
       always_assert(c);
@@ -1044,23 +1047,6 @@ CseUnorderedLocationSet SharedState::get_relevant_written_locations(
     return general_memory_barrier_locations;
   }
 
-  auto get_relevant_written_locations =
-      [&](const DexMethod* method) -> const CseUnorderedLocationSet& {
-    if (method->is_external() || is_native(method)) {
-      return general_memory_barrier_locations;
-    }
-    if (is_abstract(method)) {
-      // We say abstract methods are not a barrier per se, as we'll inspect all
-      // overriding methods further below.
-      return no_locations;
-    }
-    auto it = m_method_written_locations.find(method);
-    if (it == m_method_written_locations.end()) {
-      return general_memory_barrier_locations;
-    }
-    return it->second;
-  };
-
   auto method_ref = insn->get_method();
   DexMethod* method = resolve_method(method_ref, opcode_to_search(insn));
   CseUnorderedLocationSet written_locations;
@@ -1197,7 +1183,7 @@ CommonSubexpressionElimination::CommonSubexpressionElimination(
       if (!def_c) {
         continue;
       }
-      IRInstruction* earlier_insn = *def_c;
+      const IRInstruction* earlier_insn = *def_c;
       if (earlier_insn == insn) {
         continue;
       }
@@ -1219,7 +1205,7 @@ CommonSubexpressionElimination::CommonSubexpressionElimination(
   }
 }
 
-static IROpcode get_move_opcode(IRInstruction* earlier_insn) {
+static IROpcode get_move_opcode(const IRInstruction* earlier_insn) {
   if (earlier_insn->has_dest()) {
     return earlier_insn->dest_is_wide()
                ? OPCODE_MOVE_WIDE
@@ -1269,10 +1255,10 @@ bool CommonSubexpressionElimination::patch(bool is_static,
 
   // gather relevant instructions, and allocate temp registers
 
-  std::unordered_map<IRInstruction*, std::pair<IROpcode, reg_t>> temps;
-  std::unordered_set<IRInstruction*> insns;
+  std::unordered_map<const IRInstruction*, std::pair<IROpcode, reg_t>> temps;
+  std::unordered_set<const IRInstruction*> insns;
   for (auto& f : m_forward) {
-    IRInstruction* earlier_insn = f.earlier_insn;
+    const IRInstruction* earlier_insn = f.earlier_insn;
     if (!temps.count(earlier_insn)) {
       IROpcode move_opcode = get_move_opcode(earlier_insn);
       if (earlier_insn->has_dest()) {
@@ -1310,7 +1296,7 @@ bool CommonSubexpressionElimination::patch(bool is_static,
 
   std::vector<std::pair<Forward, IRInstruction*>> to_check;
   for (auto& f : m_forward) {
-    IRInstruction* earlier_insn = f.earlier_insn;
+    const IRInstruction* earlier_insn = f.earlier_insn;
     auto& q = temps.at(earlier_insn);
     IROpcode move_opcode = q.first;
     reg_t temp_reg = q.second;
@@ -1340,11 +1326,11 @@ bool CommonSubexpressionElimination::patch(bool is_static,
   // insert moves to define the forwarded value
 
   for (auto& r : temps) {
-    IRInstruction* earlier_insn = r.first;
+    const IRInstruction* earlier_insn = r.first;
     IROpcode move_opcode = r.second.first;
     reg_t temp_reg = r.second.second;
 
-    auto& it = iterators.at(earlier_insn);
+    auto& it = iterators.at(const_cast<IRInstruction*>(earlier_insn));
     IRInstruction* move_insn = new IRInstruction(move_opcode);
     auto src_reg =
         earlier_insn->has_dest() ? earlier_insn->dest() : earlier_insn->src(0);
@@ -1422,7 +1408,7 @@ void CommonSubexpressionElimination::insert_runtime_assertions(
 
   for (auto& p : to_check) {
     auto& f = p.first;
-    IRInstruction* earlier_insn = f.earlier_insn;
+    const IRInstruction* earlier_insn = f.earlier_insn;
     IRInstruction* insn = f.insn;
     auto move_insn = p.second;
 

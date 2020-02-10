@@ -103,6 +103,9 @@ class AliasFixpointIterator final
     if (m_config.eliminate_const_literals_with_same_type_demands) {
       if (!m_constant_uses) {
         m_constant_uses.reset(new constant_uses::ConstantUses(m_cfg, m_method));
+        if (m_constant_uses->has_type_inference()) {
+          m_stats.type_inferences++;
+        }
       }
       return m_constant_uses->get_constant_type_demand(insn);
     }
@@ -269,8 +272,8 @@ class AliasFixpointIterator final
   // ALL destinations must be returned by this method (unlike get_src_value) if
   // we miss a destination register, we'll fail to clobber it and think we know
   // that a register holds a stale value.
-  RegisterPair get_dest_reg(ir_list::InstructionIterator it,
-                            ir_list::InstructionIterator end) const {
+  RegisterPair get_dest_reg(const ir_list::InstructionIterator& it,
+                            const ir_list::InstructionIterator& end) const {
     IRInstruction* insn = it->insn;
     RegisterPair dest;
 
@@ -402,10 +405,11 @@ Stats& Stats::operator+=(const Stats& that) {
   moves_eliminated += that.moves_eliminated;
   replaced_sources += that.replaced_sources;
   skipped_due_to_too_many_registers += that.skipped_due_to_too_many_registers;
+  type_inferences += that.type_inferences;
   return *this;
 }
 
-Stats CopyPropagation::run(Scope scope) {
+Stats CopyPropagation::run(const Scope& scope) {
   return walk::parallel::methods<Stats>(
       scope,
       [this](DexMethod* m) {
@@ -423,7 +427,7 @@ Stats CopyPropagation::run(Scope scope) {
           IRTypeChecker checker(m);
           checker.run();
           if (!checker.good()) {
-            std::string msg = checker.what();
+            const std::string& msg = checker.what();
             TRACE(RME,
                   1,
                   "%s: Inconsistency in Dex code. %s",

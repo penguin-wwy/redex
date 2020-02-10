@@ -53,22 +53,22 @@ void test_object_inliner(
     const std::string& insert_before_instr,
     uint16_t result_reg,
     uint16_t caller_this,
-    const std::vector<std::pair<std::string, uint16_t>> fields,
-    const std::vector<std::pair<std::string, std::string>> swap_fields,
-    const std::vector<uint16_t> srcs,
+    const std::vector<std::pair<std::string, uint16_t>>& fields,
+    const std::vector<std::pair<std::string, std::string>>& swap_fields,
+    const std::vector<uint16_t>& srcs,
     const std::string& expected_str) {
   DexType* callee_type = DexType::make_type(callee_class.c_str());
   DexType* caller_type = DexType::make_type(caller_class.c_str());
 
   std::vector<DexFieldRef*> field_refs = {};
-  for (auto field_data : fields) {
+  for (const auto& field_data : fields) {
     auto field_ref = DexField::make_field(callee_class + field_data.first);
     field_ref->make_concrete(ACC_PUBLIC);
     field_refs.emplace_back(field_ref);
   }
 
   std::map<DexFieldRef*, DexFieldRef*, dexfields_comparator> field_swap_refs;
-  for (auto field_swap : swap_fields) {
+  for (const auto& field_swap : swap_fields) {
     auto callee_field = DexField::make_field(callee_class + field_swap.first);
     callee_field->make_concrete(ACC_PUBLIC);
     auto caller_field = DexField::make_field(caller_class + field_swap.second);
@@ -156,6 +156,62 @@ TEST_F(ObjectInlinerTest, simple_class_inline) {
       (move-result-pseudo-object v4)
       (move v2 v4)
       (invoke-virtual (v2 v1) "LBar;.child:(LFoo;)LBaz;")
+      (return v2)
+    )
+  )";
+  test_object_inliner(caller_str,
+                      callee_str,
+                      "LFoo;",
+                      "LBoo;",
+                      "((invoke-virtual (v2 v1) \"LBar;.child:(LFoo;)LBaz;\"))",
+                      2,
+                      0,
+                      {},
+                      {},
+                      {},
+                      expected_str);
+}
+
+TEST_F(ObjectInlinerTest, simple_class_inline_with_cfg) {
+  const auto& caller_str = R"(
+    (
+    (load-param v0)
+    (new-instance "LFoo;")
+    (move-result-pseudo-object v1)
+    (new-instance "LBar;")
+    (move-result-pseudo-object v2)
+    (const v3 0)
+    (if-eq v2 v3 :escape)
+    (.pos:0 "LBar;.fumble:()V" "Bar" "22")
+    (invoke-virtual (v2 v1) "LBar;.child:(LFoo;)LBaz;")
+    (:escape)
+    (return v2)
+    )
+  )";
+  const auto& callee_str = R"(
+    (
+      (load-param v0)
+      (new-instance "LBaz;")
+      (move-result-pseudo-object v1)
+      (return v1)
+    )
+  )";
+  const auto& expected_str = R"(
+    (
+      (load-param v0)
+      (new-instance "LFoo;")
+      (move-result-pseudo-object v1)
+      (new-instance "LBar;")
+      (move-result-pseudo-object v2)
+      (const v3 0)
+      (if-eq v2 v3 :L0)
+      (move v4 v0)
+      (new-instance "LBaz;")
+      (move-result-pseudo-object v5)
+      (move v2 v5)
+      (.pos:dbg_0 "LBar;.fumble:()V" "Bar" "22")
+      (invoke-virtual (v2 v1) "LBar;.child:(LFoo;)LBaz;")
+      (:L0)
       (return v2)
     )
   )";

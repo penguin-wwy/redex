@@ -208,8 +208,8 @@ class TaggedBase {
     // See copy constructor. Assignment operators for lint.
     ValueStream& operator=(const ValueStream&) { not_reached(); }
     ValueStream& operator=(ValueStream&& rhs) {
-      oss(std::move(rhs.oss));
-      trg(rhs.trg);
+      oss = std::move(rhs.oss);
+      trg = rhs.trg;
       rhs.disposed = true;
       return *this;
     }
@@ -235,7 +235,7 @@ class TaggedBase {
   std::ostream& attribute(const std::string& attr) {
     m_output << " ";
     always_assert_log(!attr.empty(), "Attribute must be non-empty");
-    always_assert_log(attr.find(" ") == std::string::npos,
+    always_assert_log(attr.find(' ') == std::string::npos,
                       "Attribute must not have spaces");
     return m_output << attr << ":";
   }

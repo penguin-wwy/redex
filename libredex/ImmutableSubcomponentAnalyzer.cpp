@@ -9,6 +9,7 @@
 
 #include <sstream>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <boost/functional/hash.hpp>
@@ -156,10 +157,10 @@ class Analyzer final : public BaseIRAnalyzer<AbstractAccessPathEnvironment> {
  public:
   Analyzer(const cfg::ControlFlowGraph& cfg,
            std::function<bool(DexMethodRef*)> is_immutable_getter,
-           const std::unordered_set<reg_t> allowed_locals)
+           const std::unordered_set<reg_t>& allowed_locals)
       : BaseIRAnalyzer<AbstractAccessPathEnvironment>(cfg),
         m_cfg(cfg),
-        m_is_immutable_getter(is_immutable_getter),
+        m_is_immutable_getter(std::move(is_immutable_getter)),
         m_allowed_locals(allowed_locals) {}
 
   bool is_local_analyzable(reg_t reg) const {
@@ -167,7 +168,7 @@ class Analyzer final : public BaseIRAnalyzer<AbstractAccessPathEnvironment> {
   }
 
   void analyze_instruction(
-      IRInstruction* insn,
+      const IRInstruction* insn,
       AbstractAccessPathEnvironment* current_state) const override {
     switch (insn->opcode()) {
     case IOPCODE_LOAD_PARAM_OBJECT:
@@ -335,7 +336,7 @@ class Analyzer final : public BaseIRAnalyzer<AbstractAccessPathEnvironment> {
       const AbstractAccessPathEnvironment& env) {
     BindingSnapshot ret;
     if (env.kind() == AbstractValueKind::Value) {
-      auto bindings = env.bindings();
+      const auto& bindings = env.bindings();
       for (auto it = bindings.begin(); it != bindings.end(); ++it) {
         auto domain = it->second;
         if (domain.access_path()) {
@@ -399,7 +400,7 @@ std::unordered_set<reg_t> compute_unambiguous_registers(IRCode* code) {
 
 ImmutableSubcomponentAnalyzer::ImmutableSubcomponentAnalyzer(
     DexMethod* dex_method,
-    std::function<bool(DexMethodRef*)> is_immutable_getter) {
+    const std::function<bool(DexMethodRef*)>& is_immutable_getter) {
   IRCode* code = dex_method->get_code();
   if (code == nullptr) {
     return;

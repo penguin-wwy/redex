@@ -8,32 +8,9 @@
 #pragma once
 
 #include "DexClass.h"
+#include "FrameworkApi.h"
 
 namespace api {
-
-struct MRefInfo {
-  DexMethodRef* mref;
-  DexAccessFlags access_flags;
-
-  MRefInfo(DexMethodRef* _mref, DexAccessFlags _access_flags)
-      : mref(_mref), access_flags(_access_flags) {}
-};
-
-struct FRefInfo {
-  DexFieldRef* fref;
-  DexAccessFlags access_flags;
-
-  FRefInfo(DexFieldRef* _fref, DexAccessFlags _access_flags)
-      : fref(_fref), access_flags(_access_flags) {}
-};
-
-struct FrameworkAPI {
-  DexType* cls;
-  DexType* super_cls;
-  std::vector<MRefInfo> mrefs_info;
-  std::vector<FRefInfo> frefs_info;
-  DexAccessFlags access_flags;
-};
 
 using TypeToFrameworkAPI = std::unordered_map<const DexType*, FrameworkAPI>;
 
@@ -41,9 +18,10 @@ class ApiLevelsUtils {
  public:
   ApiLevelsUtils(const Scope& scope,
                  const std::string& framework_api_info_filename,
-                 int api_level)
+                 uint32_t api_level)
       : m_framework_api_info_filename(framework_api_info_filename),
-        m_api_level(api_level) {
+        m_api_level(api_level),
+        m_sdk_api(framework_api_info_filename) {
     // Setting up both m_types_to_framework_api and m_framework_classes
     load_framework_api(scope);
   }
@@ -52,7 +30,9 @@ class ApiLevelsUtils {
     return m_types_to_framework_api;
   }
 
-  std::unordered_map<DexType*, FrameworkAPI> get_framework_classes();
+  std::unordered_map<DexType*, FrameworkAPI> get_framework_classes() {
+    return m_sdk_api.get_framework_classes();
+  }
 
   /**
    * NOTE: Workaround for the fact that real private members can be made public
@@ -75,6 +55,7 @@ class ApiLevelsUtils {
   std::unordered_set<DexType*> m_framework_classes;
   std::string m_framework_api_info_filename;
   uint32_t m_api_level;
+  api::AndroidSDK m_sdk_api;
 
   /**
    * NOTE: Those work as "non-private" in the sense that we check where

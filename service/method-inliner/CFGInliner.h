@@ -35,13 +35,20 @@ class CFGInliner {
 
  private:
   /*
+   * A "ghost block" may be added for CFGs that have multiple exit blocks and
+   * EDGE_GHOST edges are added from all exit points to this one (empty) ghost
+   * block. This block gets in the way while inlining. Remove if it's there.
+   */
+  static void remove_ghost_exit_block(ControlFlowGraph* cfg);
+
+  /*
    * If `it` isn't already, make it the last instruction of its block
    */
   static Block* maybe_split_block(ControlFlowGraph* caller,
                                   const InstructionIterator& it);
 
   /*
-   * If `it` isn't already, make it the first instruction of its block
+   * If `it` isn't first, make it the first instruction of its block
    */
   static Block* maybe_split_block_before(ControlFlowGraph* caller,
                                          const InstructionIterator& it);
@@ -59,10 +66,13 @@ class CFGInliner {
                              ControlFlowGraph* callee);
 
   /*
-   * Add edges from callsite to the entry point and back from the exit points to
-   * to the block after the callsite
+   * If `insert_after`, add edges from callsite to the entry point and back from
+   * the exit points to to the block after the callsite. Otherwise add edges
+   * into callsite to the entry point and from the exit points to the block
+   * after.
    */
-  static void connect_cfgs(ControlFlowGraph* cfg,
+  static void connect_cfgs(bool insert_after,
+                           ControlFlowGraph* cfg,
                            Block* callsite,
                            const std::vector<Block*>& callee_blocks,
                            Block* callee_entry,

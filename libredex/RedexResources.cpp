@@ -146,7 +146,7 @@ std::string dotname_to_dexname(const std::string& classname) {
 }
 
 void extract_by_pattern(const std::string& string_to_search,
-                        boost::regex regex,
+                        const boost::regex& regex,
                         std::unordered_set<std::string>& result) {
   boost::smatch m;
   std::string s = string_to_search;
@@ -179,7 +179,7 @@ void extract_js_asset_registrations(const std::string& file_contents,
   static boost::regex special_char_regex("[^a-z0-9_]");
   std::unordered_set<std::string> registrations;
   extract_by_pattern(file_contents, register_regex, registrations);
-  for (std::string registration : registrations) {
+  for (const std::string& registration : registrations) {
     boost::smatch m;
     if (!boost::regex_search(registration, m, location_regex) ||
         m.size() == 0) {
@@ -654,7 +654,7 @@ std::unordered_set<std::string> get_files_by_suffix(
   if (exists(dir) && is_directory(dir)) {
     for (auto it = dir_iterator(dir); it != dir_iterator(); ++it) {
       auto const& entry = *it;
-      path_t entry_path = entry.path();
+      const path_t& entry_path = entry.path();
 
       if (is_regular_file(entry_path) &&
           ends_with(entry_path.string().c_str(), suffix.c_str())) {
@@ -960,14 +960,14 @@ std::vector<std::string> find_layout_files(const std::string& apk_directory) {
   if (exists(res) && is_directory(res)) {
     for (auto it = dir_iterator(res); it != dir_iterator(); ++it) {
       auto const& entry = *it;
-      path_t entry_path = entry.path();
+      const path_t& entry_path = entry.path();
 
       if (is_directory(entry_path) &&
           starts_with(entry_path.filename().string().c_str(), "layout")) {
         for (auto lit = dir_iterator(entry_path); lit != dir_iterator();
              ++lit) {
           auto const& layout_entry = *lit;
-          path_t layout_path = layout_entry.path();
+          const path_t& layout_path = layout_entry.path();
           if (is_regular_file(layout_path)) {
             layout_files.push_back(layout_path.string());
           }
@@ -994,7 +994,7 @@ void collect_layout_classes_and_attributes(
     std::unordered_set<std::string>& out_classes,
     std::unordered_multimap<std::string, std::string>& out_attributes) {
   std::vector<std::string> files = find_layout_files(apk_directory);
-  for (auto layout_file : files) {
+  for (const auto& layout_file : files) {
     collect_layout_classes_and_attributes_for_file(
         layout_file, attributes_to_read, out_classes, out_attributes);
   }
@@ -1036,7 +1036,7 @@ std::vector<std::string> find_native_library_files(
   if (exists(lib) && is_directory(lib)) {
     for (auto it = rdir_iterator(lib); it != rdir_iterator(); ++it) {
       auto const& entry = *it;
-      path_t entry_path = entry.path();
+      const path_t& entry_path = entry.path();
       if (is_regular_file(entry_path) &&
           ends_with(entry_path.filename().string().c_str(),
                     library_extension.c_str())) {
@@ -1055,7 +1055,7 @@ std::unordered_set<std::string> get_native_classes(
   std::vector<std::string> native_libs =
       find_native_library_files(apk_directory);
   std::unordered_set<std::string> all_classes;
-  for (auto native_lib : native_libs) {
+  for (const auto& native_lib : native_libs) {
     std::string contents = read_entire_file(native_lib);
     std::unordered_set<std::string> classes_from_layout =
         extract_classes_from_native_lib(contents);

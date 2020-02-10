@@ -93,7 +93,7 @@ void update_code_type_refs(
     const std::unordered_map<const DexType*, DexType*>& mergeable_to_merger) {
   TRACE(
       TERA, 8, "  Updating NEW_INSTANCE, NEW_ARRAY, CHECK_CAST & CONST_CLASS");
-  TypeSet mergeables;
+  UnorderedTypeSet mergeables;
   for (const auto& pair : mergeable_to_merger) {
     mergeables.insert(pair.first);
   }
@@ -378,11 +378,11 @@ std::string merger_info(const MergerType& merger) {
      << merger.mergeables.size() << ", dmethods " << merger.dmethods.size()
      << ", non_virt_methods " << merger.non_virt_methods.size()
      << ", virt_methods " << merger.vmethods.size() << "\n";
-  for (const auto imeths : merger.intfs_methods) {
+  for (const auto& imeths : merger.intfs_methods) {
     ss << "  interface methods " << imeths.methods.size() << "\n";
   }
   ss << " Field maps \n";
-  for (auto fmap : merger.field_map) {
+  for (const auto& fmap : merger.field_map) {
     ss << "  type " << SHOW(fmap.first) << "\n";
     size_t num_empty_fields = 0;
     for (const auto field : fmap.second) {
@@ -497,7 +497,7 @@ void ModelMerger::update_merger_fields(const MergerType& merger) {
   m_merger_fields[merger.type] = merger_fields;
 }
 
-void ModelMerger::update_stats(const std::string model_name,
+void ModelMerger::update_stats(const std::string& model_name,
                                const std::vector<const MergerType*>& mergers,
                                ModelMethodMerger& mm) {
   for (auto merger : mergers) {
