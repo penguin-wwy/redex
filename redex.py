@@ -329,6 +329,10 @@ def run_redex_binary(state):
         "--outdir",
         state.dex_dir,
     ]
+
+    if state.args.cmd_prefix is not None:
+        args = state.args.cmd_prefix.split() + args
+
     if state.args.config:
         args += ["--config", state.args.config]
 
@@ -384,7 +388,7 @@ def run_redex_binary(state):
     start = timer()
 
     if state.args.debug:
-        print("cd %s && %s" % (os.getcwd(), " ".join(prefix + map(quote, args))))
+        print("cd %s && %s" % (os.getcwd(), " ".join(prefix + list(map(quote, args)))))
         sys.exit()
 
     env = logger.setup_trace_for_child(os.environ)
@@ -546,8 +550,13 @@ def create_output_apk(
 
     # Create new zip file
     with zipfile.ZipFile(unaligned_apk_path, "w") as unaligned_apk:
-        for dirpath, _dirnames, filenames in os.walk(extracted_apk_dir):
-            for filename in filenames:
+        # Need sorted output for deterministic zip file. Sorting `dirnames` will
+        # ensure the tree walk order. Sorting `filenames` will ensure the files
+        # inside the tree.
+        # This scheme uses less memory than collecting all files first.
+        for dirpath, dirnames, filenames in os.walk(extracted_apk_dir):
+            dirnames.sort()
+            for filename in sorted(filenames):
                 filepath = join(dirpath, filename)
                 archivepath = filepath[len(extracted_apk_dir) + 1 :]
                 try:
@@ -777,7 +786,6 @@ Given an APK, produce a better APK!
         default="",
         help="Stop before stop_pass and dump intermediate dex and IR meta data to output_ir folder",
     )
-
     parser.add_argument(
         "--debug-source-root",
         default=None,
@@ -790,6 +798,8 @@ Given an APK, produce a better APK!
         action="store_true",
         help="Clean up temporaries even under failure",
     )
+
+    parser.add_argument("--cmd-prefix", type=str, help="Prefix redex-all with")
 
     return parser
 
